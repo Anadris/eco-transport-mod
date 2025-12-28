@@ -7,7 +7,7 @@ This mod helps you track prices and filter buy / sell orders where you can make 
 
 ## Easy install
 
-Also available from [mod.io]()
+Also available from [mod.io](https://mod.io/g/eco/m/eco-transport#description)
 
 Copy `EcoTransportMod` __folder__ on your server into your mods folder `\Server\Mods\UserCode`
 
