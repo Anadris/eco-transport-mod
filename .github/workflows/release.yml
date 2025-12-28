@@ -9,6 +9,8 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -40,8 +42,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.vars.outputs.VERSION }}
-          name: EcoTransportMod ${{ steps.vars.outputs.VERSION }}
-          files: EcoTransportMod-${{ steps.vars.outputs.VERSION }}.zip
+          tag_name: ${{ steps.vars.outputs.VERSION_SAFE  }}
+          name: EcoTransportMod ${{ steps.vars.outputs.VERSION_SAFE  }}
+          files: EcoTransportMod-${{ steps.vars.outputs.VERSION_SAFE  }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
