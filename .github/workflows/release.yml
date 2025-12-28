@@ -2,6 +2,10 @@ name: Release EcoTransportMod
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for the release (e.g., v1.2.0)'
+        required: true
   push:
     tags:
       - 'v*'
