@@ -32,7 +32,10 @@ jobs:
       - name: Create archive
         run: |
           cd EcoTransportMod
-          zip -r ../EcoTransportMod-${{ steps.vars.outputs.VERSION }}.zip .
+          VERSION_SAFE=${GITHUB_REF#refs/tags/}   # pour les tags
+          VERSION_SAFE=${VERSION_SAFE#refs/heads/} # pour les branches
+          VERSION_SAFE=${VERSION_SAFE//\//-}
+          zip -r ../EcoTransportMod-${VERSION_SAFE}.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
