@@ -20,27 +20,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get version from tag
+      - name: Set version
         id: vars
         run: |
-          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          # Si workflow_dispatch, prend l’input tag
+          VERSION_SAFE=${{ github.event.inputs.tag }}
+          # Si push d’un tag, prend le tag Git
+          if [ -z "$VERSION_SAFE" ]; then
+            VERSION_SAFE=${GITHUB_REF#refs/tags/}
+          fi
+          echo "VERSION_SAFE=$VERSION_SAFE" >> $GITHUB_OUTPUT
 
       - name: Verify tag is on main branch
         run: |
           BRANCH=$(git branch -r --contains $(git rev-list -n 1 $GITHUB_REF) | grep origin/main || true)
           if [ -z "$BRANCH" ]; then
-            echo "❌ Tag ${{ steps.vars.outputs.VERSION }} is not on main branch. Aborting release."
+            echo "❌ Tag ${{ steps.vars.outputs.VERSION_SAFE  }} is not on main branch. Aborting release."
             exit 1
           else
-            echo "✅ Tag ${{ steps.vars.outputs.VERSION }} is on main branch. Proceeding."
+            echo "✅ Tag ${{ steps.vars.outputs.VERSION_SAFE  }} is on main branch. Proceeding."
           fi
 
       - name: Create archive
         run: |
           cd EcoTransportMod
-          VERSION_SAFE=${GITHUB_REF#refs/tags/}   # pour les tags
-          VERSION_SAFE=${VERSION_SAFE#refs/heads/} # pour les branches
-          VERSION_SAFE=${VERSION_SAFE//\//-}
           zip -r ../EcoTransportMod-${VERSION_SAFE}.zip .
 
       - name: Create GitHub Release
