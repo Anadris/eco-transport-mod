@@ -43,7 +43,7 @@ jobs:
 
       - name: Create archive
         run: |
-          zip -r EcoTransport-${VERSION_SAFE}.zip EcoTransportMod
+          zip -r EcoTransport-${{ steps.vars.outputs.VERSION_SAFE }}.zip EcoTransportMod
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
