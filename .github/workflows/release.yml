@@ -1,0 +1,44 @@
+name: Release EcoTransportMod
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: vars
+        run: |
+          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Verify tag is on main branch
+        run: |
+          BRANCH=$(git branch -r --contains $(git rev-list -n 1 $GITHUB_REF) | grep origin/main || true)
+          if [ -z "$BRANCH" ]; then
+            echo "❌ Tag ${{ steps.vars.outputs.VERSION }} is not on main branch. Aborting release."
+            exit 1
+          else
+            echo "✅ Tag ${{ steps.vars.outputs.VERSION }} is on main branch. Proceeding."
+          fi
+
+      - name: Create archive
+        run: |
+          cd EcoTransportMod
+          zip -r ../EcoTransportMod-${{ steps.vars.outputs.VERSION }}.zip .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.VERSION }}
+          name: EcoTransportMod ${{ steps.vars.outputs.VERSION }}
+          files: EcoTransportMod-${{ steps.vars.outputs.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
