@@ -1,4 +1,8 @@
 # ECO Transport Mod
+Mod for the game Eco, edited by StangeLoop studio.
+[https://play.eco/](https://play.eco/)
+
+![EcoBanner](https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/382310/669bd5d9c8d2469a776d81011670f2889fac86b0/header.jpg)
 
 A useful and lightweight mod to help players find transport opportunities.
 
@@ -13,26 +17,26 @@ Copy `EcoTransportMod` __folder__ on your server into your mods folder `\Server\
 
 Reboot your server and it's done !
 
+## Features
+
+- Find profitable trade opportunities across all stores
+- Filter by matching currency (buy and sell must use same currency)
+- Native Eco UI with clickable links for stores, items and currencies
+- Distance calculation between buy/sell locations
+
 ## Usage
 
 See available commands by typing `/transport info`
 
-### Available commands 
+### Available commands
 
-| Commands | Description |
-| -------- | ----------- |
-| **UI Panel Commands** |  |
-| /transport panel | Open the main UI panel |
-| /transport find < product > | Search with UI panel |
-| /transport detail < product > | Details product analysis |
-| |
-| **Chat Commands** |  |
-| /transport stats | Show market margin opportunities |
-| /transport search < product > | Search for a specific product |
-| /transport refresh | Refresh market data |
-| /transport export | Export data to JSON (admin only) |
-| /transport info | Show this help |
-| |
+| Command | Description |
+| ------- | ----------- |
+| `/transport panel [n]` | Open the main UI panel (max 200 items) |
+| `/transport find <product>` | Search with UI panel |
+| `/transport detail <product>` | Detailed product analysis |
+| `/transport refresh` | Refresh market data |
+| `/transport info` | Show help |
 
 
 
