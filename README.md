@@ -45,3 +45,14 @@ See available commands by typing `/transport info`
 ## Contributions
 
 Contributions and bug reports are welcome !
+
+### Future Plan
+- Add storage space check at buyer's store
+- Improve UI experience (resize window, components -> buttons, select, tables)
+- Add filtering on player's skill production & player's own materials
+- Add config command : learned skill, transport method(cart, truck) 
+- Add transportation info (number of trips required)
+- Add
+- [New Skill] Add a configurable variable for admins to make it a skill, which locks all features except public ones behind it.
+- [Skill Feature] Add automatique itinerary suggestion.
+- [Public Feature] Add feature DeliveryOpportunity which allow any user to place an order with delivery, and transporter (only) to answer it.

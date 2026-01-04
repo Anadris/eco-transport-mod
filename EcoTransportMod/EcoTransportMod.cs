@@ -65,8 +65,20 @@ namespace Eco.Mods.EcoTransportMod
         public string OwnerName { get; set; }
         public IAlias Owner { get; set; }
         public WorldObject Store { get; set; }
+        public StoreComponent StoreComp { get; set; }
         public Currency Currency { get; set; }
         public string CurrencyName => Currency?.Name ?? "Unknown";
+
+        /// <summary>
+        /// Gets the store's balance in its currency.
+        /// Returns the amount of currency the store has available for buying items.
+        /// </summary>
+        public float GetStoreBalance()
+        {
+            var bankAccount = StoreComp?.BankAccount;
+            if (bankAccount == null || Currency == null) return float.MaxValue; // If we can't check, assume unlimited
+            return bankAccount.GetCurrencyHoldingVal(Currency);
+        }
 
         public LocString GetCurrencyLink()
         {
@@ -100,7 +112,33 @@ namespace Eco.Mods.EcoTransportMod
         public StoreOffer SellTo { get; set; }   // Where we sell (store is buying)
 
         public float Margin => SellTo.Price - BuyFrom.Price;
-        public int MaxQuantity => Math.Min(BuyFrom.Quantity, SellTo.Quantity);
+
+        /// <summary>
+        /// Maximum quantity that can be traded, limited by:
+        /// - Available quantity at buy store
+        /// - Wanted quantity at sell store
+        /// - Sell store's available balance to pay for items
+        /// </summary>
+        public int MaxQuantity
+        {
+            get
+            {
+                // Base limit: min of available and wanted quantities
+                int baseLimit = Math.Min(BuyFrom.Quantity, SellTo.Quantity);
+
+                // Check sell store balance (they need to pay us)
+                float sellStoreBalance = SellTo.GetStoreBalance();
+                if (sellStoreBalance < float.MaxValue && SellTo.Price > 0)
+                {
+                    int affordableByStore = (int)(sellStoreBalance / SellTo.Price);
+                    baseLimit = Math.Min(baseLimit, affordableByStore);
+                }
+
+                return Math.Max(0, baseLimit);
+            }
+        }
+
+        public float TotalCost => BuyFrom.Price * MaxQuantity;
         public float TotalProfit => Margin * MaxQuantity;
         public float ProfitPercent => BuyFrom.Price > 0 ? (Margin / BuyFrom.Price) * 100 : 0;
 
@@ -200,6 +238,7 @@ namespace Eco.Mods.EcoTransportMod
                         OwnerName = ownerName,
                         Owner = owner,
                         Store = worldObject,
+                        StoreComp = store,
                         Currency = currency
                     });
                 }
@@ -209,8 +248,9 @@ namespace Eco.Mods.EcoTransportMod
 
         /// <summary>
         /// Gets all profitable trade opportunities (all combinations where sell price > buy price)
+        /// Excludes opportunities where the requesting user owns the sell-to store
         /// </summary>
-        public List<TradeOpportunity> GetAllOpportunities()
+        public List<TradeOpportunity> GetAllOpportunities(User requestingUser)
         {
             _lock.EnterReadLock();
             try
@@ -233,6 +273,10 @@ namespace Eco.Mods.EcoTransportMod
                             // Only match if same currency and profitable
                             if (buyFrom.Currency == sellTo.Currency && sellTo.Price > buyFrom.Price)
                             {
+                                // Skip if requesting user owns the sell-to store
+                                if (sellTo.Owner != null && sellTo.Owner.ContainsUser(requestingUser))
+                                    continue;
+
                                 opportunities.Add(new TradeOpportunity
                                 {
                                     BuyFrom = buyFrom,
@@ -253,9 +297,9 @@ namespace Eco.Mods.EcoTransportMod
             }
         }
 
-        public List<TradeOpportunity> SearchOpportunities(string searchTerm)
+        public List<TradeOpportunity> SearchOpportunities(string searchTerm, User requestingUser)
         {
-            var allData = GetAllOpportunities();
+            var allData = GetAllOpportunities(requestingUser);
             if (string.IsNullOrWhiteSpace(searchTerm))
                 return allData;
 
@@ -265,24 +309,6 @@ namespace Eco.Mods.EcoTransportMod
                            o.BuyFrom.StoreName.ToLower().Contains(term) ||
                            o.SellTo.StoreName.ToLower().Contains(term))
                 .ToList();
-        }
-
-        public string ExportToJson()
-        {
-            var data = GetAllOpportunities();
-            var sb = new StringBuilder();
-            sb.AppendLine("[");
-            for (int i = 0; i < data.Count; i++)
-            {
-                sb.Append("  ");
-                sb.Append(data[i].ToJson());
-                if (i < data.Count - 1)
-                    sb.AppendLine(",");
-                else
-                    sb.AppendLine();
-            }
-            sb.AppendLine("]");
-            return sb.ToString();
         }
 
         public DateTime LastUpdate => _lastUpdate;
@@ -298,10 +324,10 @@ namespace Eco.Mods.EcoTransportMod
         /// <summary>
         /// Opens the main Transport info panel showing profitable opportunities
         /// </summary>
-        public static void ShowStatsPanel(Player player, int maxItems = DefaultMaxItems)
+        public static void ShowStatsPanel(Player player, User user, int maxItems = DefaultMaxItems)
         {
             EcoTransportModPlugin.DataService.RefreshAllData();
-            var opportunities = EcoTransportModPlugin.DataService.GetAllOpportunities();
+            var opportunities = EcoTransportModPlugin.DataService.GetAllOpportunities(user);
 
             var content = new LocStringBuilder();
 
@@ -338,7 +364,7 @@ namespace Eco.Mods.EcoTransportMod
             {
                 if (displayedProducts >= maxItems) break;
 
-                AppendProductGroup(content, productGroup.ToList());
+                AppendProductGroup(content, productGroup.ToList(), user);
                 content.AppendLine(); // Empty line between products
                 displayedProducts++;
             }
@@ -356,9 +382,18 @@ namespace Eco.Mods.EcoTransportMod
         }
 
         /// <summary>
+        /// Gets the user's balance for a specific currency from their bank account
+        /// </summary>
+        private static float GetUserBalance(User user, Currency currency)
+        {
+            if (user?.BankAccount == null || currency == null) return 0f;
+            return user.BankAccount.GetCurrencyHoldingVal(currency);
+        }
+
+        /// <summary>
         /// Appends a product group with all its opportunities
         /// </summary>
-        private static void AppendProductGroup(LocStringBuilder content, List<TradeOpportunity> opportunities)
+        private static void AppendProductGroup(LocStringBuilder content, List<TradeOpportunity> opportunities, User user)
         {
             if (!opportunities.Any()) return;
 
@@ -370,12 +405,20 @@ namespace Eco.Mods.EcoTransportMod
             // Each opportunity on its own line
             foreach (var opp in opportunities.OrderByDescending(o => o.TotalProfit))
             {
-                var marginColor = opp.ProfitPercent >= 50 ? "#00FF00" : (opp.ProfitPercent >= 20 ? "#90EE90" : "#ADFF2F");
+                var marginColor = opp.ProfitPercent >= 50 ? "#ADFF2F" : (opp.ProfitPercent >= 20 ? "#90EE90" : "#ADFF2F");
                 var currencyLink = opp.BuyFrom.GetCurrencyLink();
+
+                // Check if user can afford this opportunity
+                float userBalance = GetUserBalance(user, opp.BuyFrom.Currency);
+                bool canAfford = userBalance >= opp.TotalCost;
+                var totalCostColor = canAfford ? "#ADFF2F" : "#FF6B6B"; // Green if affordable, light red if not
+
                 content.AppendLine(Localizer.Do($"    - {opp.BuyFrom.GetStoreLink()}  →  {opp.SellTo.GetStoreLink()}"));
-                content.AppendLine(Localizer.Do($"      Buy:  x {opp.BuyFrom.Quantity} at {Text.Negative(Text.StyledNum(opp.BuyFrom.Price))} {currencyLink}"));
-                content.AppendLine(Localizer.Do($"      Sell at {Text.Positive(Text.StyledNum(opp.SellTo.Price))} {currencyLink}"));
-                content.AppendLine(Localizer.Do($"      Margin: {Text.Color(marginColor, Text.StyledNum(opp.Margin))} {currencyLink}        Qty: {opp.MaxQuantity}        Profit: {Text.Positive(Text.StyledNum(opp.TotalProfit))} {currencyLink}       Distance: {opp.Distance:F0}m"));
+                var affordMsg = canAfford ? "" : $"  {Text.Color(totalCostColor, "(you only have " + Text.StyledNum(userBalance) + ")")}";
+                content.AppendLine(Localizer.Do($"      Buy at {Text.Negative(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))}            →            Sell at {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))}"));
+                content.AppendLine(Localizer.Do($"      Qty:  {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.MaxQuantity)))}          Margin:  {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.Margin)))}    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))}"));                
+                content.AppendLine(Localizer.Do($"      Distance:   {Text.Info($"{opp.Distance:F0}")} meters"));
+                content.AppendLine(Localizer.Do($"      Total Cost:   {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink} {affordMsg} "));                
                 content.AppendLine();
             }
         }
@@ -383,10 +426,10 @@ namespace Eco.Mods.EcoTransportMod
         /// <summary>
         /// Opens a search results panel
         /// </summary>
-        public static void ShowSearchPanel(Player player, string searchTerm, int maxItems = DefaultMaxItems)
+        public static void ShowSearchPanel(Player player, User user, string searchTerm, int maxItems = DefaultMaxItems)
         {
             EcoTransportModPlugin.DataService.RefreshAllData();
-            var results = EcoTransportModPlugin.DataService.SearchOpportunities(searchTerm);
+            var results = EcoTransportModPlugin.DataService.SearchOpportunities(searchTerm, user);
 
             var content = new LocStringBuilder();
 
@@ -414,7 +457,7 @@ namespace Eco.Mods.EcoTransportMod
             {
                 if (displayedProducts >= maxItems) break;
 
-                AppendProductGroup(content, productGroup.ToList());
+                AppendProductGroup(content, productGroup.ToList(), user);
                 content.AppendLine();
                 displayedProducts++;
             }
@@ -433,10 +476,15 @@ namespace Eco.Mods.EcoTransportMod
         /// <summary>
         /// Shows detailed info for a specific trade opportunity
         /// </summary>
-        public static void ShowOpportunityDetail(Player player, TradeOpportunity opp)
+        public static void ShowOpportunityDetail(Player player, User user, TradeOpportunity opp)
         {
             var content = new LocStringBuilder();
-            var marginColor = opp.ProfitPercent >= 50 ? "#00FF00" : (opp.ProfitPercent >= 20 ? "#90EE90" : "#ADFF2F");
+            var marginColor = opp.ProfitPercent >= 50 ? "#ADFF2F" : (opp.ProfitPercent >= 20 ? "#90EE90" : "#ADFF2F");
+
+            // Check if user can afford this opportunity
+            float userBalance = GetUserBalance(user, opp.BuyFrom.Currency);
+            bool canAfford = userBalance >= opp.TotalCost;
+            var totalCostColor = canAfford ? "#ADFF2F" : "#FF6B6B"; // Green if affordable, light red if not
 
             // Item header
             content.AppendLine(TextLoc.HeaderLocStr("Trade Opportunity"));
@@ -451,7 +499,7 @@ namespace Eco.Mods.EcoTransportMod
             content.AppendLine(TextLoc.HeaderLocStr("Buy From"));
             content.AppendLine(Localizer.Do($"Store: {opp.BuyFrom.GetStoreLink()}"));
             content.AppendLine(Localizer.Do($"Owner: {opp.BuyFrom.GetOwnerLink()}"));
-            content.AppendLine(Localizer.Do($"Price: {Text.Negative(Text.StyledNum(opp.BuyFrom.Price))} {currencyLink}"));
+            content.AppendLine(Localizer.Do($"Price: {Text.Negative(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))} {currencyLink}"));
             content.AppendLine(Localizer.Do($"Available: {Text.Info(opp.BuyFrom.Quantity.ToString())}"));
             content.AppendLine();
 
@@ -459,18 +507,19 @@ namespace Eco.Mods.EcoTransportMod
             content.AppendLine(TextLoc.HeaderLocStr("Sell To"));
             content.AppendLine(Localizer.Do($"Store: {opp.SellTo.GetStoreLink()}"));
             content.AppendLine(Localizer.Do($"Owner: {opp.SellTo.GetOwnerLink()}"));
-            content.AppendLine(Localizer.Do($"Price: {Text.Positive(Text.StyledNum(opp.SellTo.Price))} {currencyLink}"));
+            content.AppendLine(Localizer.Do($"Price: {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))} {currencyLink}"));
             content.AppendLine(Localizer.Do($"Wants: {Text.Info(opp.SellTo.Quantity.ToString())}"));
             content.AppendLine();
 
             // Profit analysis
             content.AppendLine(TextLoc.HeaderLocStr("Profit Analysis"));
             content.AppendLine(Localizer.Do($"Currency: {currencyLink}"));
-            content.AppendLine(Localizer.Do($"Margin per unit: {Text.Color(marginColor, Text.StyledNum(opp.Margin))} {currencyLink}"));
-            content.AppendLine(Localizer.Do($"Profit percentage: {Text.Color(marginColor, Text.StyledPercent(opp.ProfitPercent / 100f))}"));
+            content.AppendLine(Localizer.Do($"Margin per unit: {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.Margin)))} {currencyLink}"));
+            content.AppendLine(Localizer.Do($"Profit percentage: {Text.Bold(Text.Color(marginColor, Text.StyledPercent(opp.ProfitPercent / 100f)))}"));
             content.AppendLine(Localizer.Do($"Max tradeable: {Text.Info(opp.MaxQuantity.ToString())} units"));
             content.AppendLine(Localizer.Do($"Distance: {Text.Info($"{opp.Distance:F0}")} meters"));
-            content.AppendLine(Localizer.Do($"{Text.Bold("Total profit")}: {Text.Positive(Text.StyledNum(opp.TotalProfit))} {currencyLink}"));
+            content.AppendLine(Localizer.Do($"{Text.Bold("Total cost")}: {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink}"));
+            content.AppendLine(Localizer.Do($"{Text.Bold("Total profit")}: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}"));
 
             player.OpenInfoPanel(
                 Localizer.Do($"Transport - {opp.ProductName}"),
@@ -489,7 +538,7 @@ namespace Eco.Mods.EcoTransportMod
         public static void Refresh(User user)
         {
             EcoTransportModPlugin.DataService.RefreshAllData();
-            var opportunities = EcoTransportModPlugin.DataService.GetAllOpportunities();
+            var opportunities = EcoTransportModPlugin.DataService.GetAllOpportunities(user);
 
             user.Player?.MsgLocStr($"Market data refreshed. {opportunities.Count} trade opportunities found.");
         }
@@ -526,7 +575,7 @@ namespace Eco.Mods.EcoTransportMod
             if (maxItems < 1) maxItems = 1;
             if (maxItems > 200) maxItems = 200;
 
-            TransportUIBuilder.ShowStatsPanel(user.Player, maxItems);
+            TransportUIBuilder.ShowStatsPanel(user.Player, user, maxItems);
         }
 
         [ChatSubCommand("Transport", "Search for products with native UI panel", "find", ChatAuthorizationLevel.User)]
@@ -544,7 +593,7 @@ namespace Eco.Mods.EcoTransportMod
                 return;
             }
 
-            TransportUIBuilder.ShowSearchPanel(user.Player, productName);
+            TransportUIBuilder.ShowSearchPanel(user.Player, user, productName);
         }
 
         [ChatSubCommand("Transport", "Show detailed info for a specific product", "detail", ChatAuthorizationLevel.User)]
@@ -563,7 +612,7 @@ namespace Eco.Mods.EcoTransportMod
             }
 
             EcoTransportModPlugin.DataService.RefreshAllData();
-            var results = EcoTransportModPlugin.DataService.SearchOpportunities(productName);
+            var results = EcoTransportModPlugin.DataService.SearchOpportunities(productName, user);
 
             if (!results.Any())
             {
@@ -572,7 +621,7 @@ namespace Eco.Mods.EcoTransportMod
             }
 
             // Show detail for the first match
-            TransportUIBuilder.ShowOpportunityDetail(user.Player, results.First());
+            TransportUIBuilder.ShowOpportunityDetail(user.Player, user, results.First());
         }
     }
 }
