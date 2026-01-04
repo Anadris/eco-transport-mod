@@ -40,7 +40,7 @@ See available commands by typing `/transport info`
 
 
 
-![EcoTransport-panel](EcoTransport-panel.jpg)
+![EcoTransport-panel](EcoTransport-panel1.jpg)
 
 ## Contributions
 
