@@ -22,6 +22,8 @@ namespace Eco.Mods.EcoTransportMod
     using Eco.Shared.Localization;
     using Eco.Shared.Text;
     using Eco.Shared.Utils;
+    using Eco.Gameplay.Economy;
+    using Eco.Gameplay.Aliases;
 
     /// <summary>
     /// Main plugin class for EcoTransportMod
@@ -61,7 +63,15 @@ namespace Eco.Mods.EcoTransportMod
         public bool IsBuyOffer { get; set; } // true = store wants to buy (we can sell), false = store sells (we can buy)
         public string StoreName { get; set; }
         public string OwnerName { get; set; }
+        public IAlias Owner { get; set; }
         public WorldObject Store { get; set; }
+        public Currency Currency { get; set; }
+        public string CurrencyName => Currency?.Name ?? "Unknown";
+
+        public LocString GetCurrencyLink()
+        {
+            return Currency?.UILink() ?? Localizer.DoStr(CurrencyName);
+        }
 
         public LocString GetItemLink()
         {
@@ -73,6 +83,11 @@ namespace Eco.Mods.EcoTransportMod
         public LocString GetStoreLink()
         {
             return Store?.UILink() ?? Localizer.DoStr(StoreName);
+        }
+
+        public LocString GetOwnerLink()
+        {
+            return Localizer.DoStr(OwnerName);
         }
     }
 
@@ -162,7 +177,9 @@ namespace Eco.Mods.EcoTransportMod
                 if (offers == null) return;
 
                 var storeName = worldObject.Name ?? "Unknown Store";
-                var ownerName = worldObject.Owners?.Name ?? "Unknown";
+                var owner = worldObject.Owners;
+                var ownerName = owner?.Name ?? "Unknown";
+                var currency = store.Currency;
 
                 foreach (var offer in offers)
                 {
@@ -181,7 +198,9 @@ namespace Eco.Mods.EcoTransportMod
                         IsBuyOffer = offer.Buying,
                         StoreName = storeName,
                         OwnerName = ownerName,
-                        Store = worldObject
+                        Owner = owner,
+                        Store = worldObject,
+                        Currency = currency
                     });
                 }
             }
@@ -206,12 +225,13 @@ namespace Eco.Mods.EcoTransportMod
                     var sellOffers = productGroup.Where(o => !o.IsBuyOffer).ToList(); // Stores selling (we buy from)
                     var buyOffers = productGroup.Where(o => o.IsBuyOffer).ToList();   // Stores buying (we sell to)
 
-                    // Find all profitable combinations
+                    // Find all profitable combinations with same currency
                     foreach (var buyFrom in sellOffers)
                     {
                         foreach (var sellTo in buyOffers)
                         {
-                            if (sellTo.Price > buyFrom.Price) // Profitable!
+                            // Only match if same currency and profitable
+                            if (buyFrom.Currency == sellTo.Currency && sellTo.Price > buyFrom.Price)
                             {
                                 opportunities.Add(new TradeOpportunity
                                 {
@@ -351,9 +371,11 @@ namespace Eco.Mods.EcoTransportMod
             foreach (var opp in opportunities.OrderByDescending(o => o.TotalProfit))
             {
                 var marginColor = opp.ProfitPercent >= 50 ? "#00FF00" : (opp.ProfitPercent >= 20 ? "#90EE90" : "#ADFF2F");
+                var currencyLink = opp.BuyFrom.GetCurrencyLink();
                 content.AppendLine(Localizer.Do($"    - {opp.BuyFrom.GetStoreLink()}  →  {opp.SellTo.GetStoreLink()}"));
-                content.AppendLine(Localizer.Do($"      Buy: {Text.Negative(Text.StyledNum(opp.BuyFrom.Price))} x {opp.BuyFrom.Quantity}           Sell: {Text.Positive(Text.StyledNum(opp.SellTo.Price))} x {opp.SellTo.Quantity}"));
-                content.AppendLine(Localizer.Do($"      Margin: {Text.Color(marginColor, Text.StyledNum(opp.Margin))}              Qty: {opp.MaxQuantity}        Profit: {Text.Positive(Text.StyledNum(opp.TotalProfit))}       Distance: {opp.Distance:F0}meters"));
+                content.AppendLine(Localizer.Do($"      Buy:  x {opp.BuyFrom.Quantity} at {Text.Negative(Text.StyledNum(opp.BuyFrom.Price))} {currencyLink}"));
+                content.AppendLine(Localizer.Do($"      Sell at {Text.Positive(Text.StyledNum(opp.SellTo.Price))} {currencyLink}"));
+                content.AppendLine(Localizer.Do($"      Margin: {Text.Color(marginColor, Text.StyledNum(opp.Margin))} {currencyLink}        Qty: {opp.MaxQuantity}        Profit: {Text.Positive(Text.StyledNum(opp.TotalProfit))} {currencyLink}       Distance: {opp.Distance:F0}m"));
                 content.AppendLine();
             }
         }
@@ -423,29 +445,32 @@ namespace Eco.Mods.EcoTransportMod
             content.AppendLine(Localizer.Do($"Distance: {Text.Info($"{opp.Distance:F0}")} meters"));
             content.AppendLine();
 
+            var currencyLink = opp.BuyFrom.GetCurrencyLink();
+
             // Buy details
             content.AppendLine(TextLoc.HeaderLocStr("Buy From"));
             content.AppendLine(Localizer.Do($"Store: {opp.BuyFrom.GetStoreLink()}"));
-            content.AppendLine(Localizer.Do($"Owner: {Text.Info(opp.BuyFrom.OwnerName)}"));
-            content.AppendLine(Localizer.Do($"Price: {Text.Negative(Text.StyledNum(opp.BuyFrom.Price))}"));
+            content.AppendLine(Localizer.Do($"Owner: {opp.BuyFrom.GetOwnerLink()}"));
+            content.AppendLine(Localizer.Do($"Price: {Text.Negative(Text.StyledNum(opp.BuyFrom.Price))} {currencyLink}"));
             content.AppendLine(Localizer.Do($"Available: {Text.Info(opp.BuyFrom.Quantity.ToString())}"));
             content.AppendLine();
 
             // Sell details
             content.AppendLine(TextLoc.HeaderLocStr("Sell To"));
             content.AppendLine(Localizer.Do($"Store: {opp.SellTo.GetStoreLink()}"));
-            content.AppendLine(Localizer.Do($"Owner: {Text.Info(opp.SellTo.OwnerName)}"));
-            content.AppendLine(Localizer.Do($"Price: {Text.Positive(Text.StyledNum(opp.SellTo.Price))}"));
+            content.AppendLine(Localizer.Do($"Owner: {opp.SellTo.GetOwnerLink()}"));
+            content.AppendLine(Localizer.Do($"Price: {Text.Positive(Text.StyledNum(opp.SellTo.Price))} {currencyLink}"));
             content.AppendLine(Localizer.Do($"Wants: {Text.Info(opp.SellTo.Quantity.ToString())}"));
             content.AppendLine();
 
             // Profit analysis
             content.AppendLine(TextLoc.HeaderLocStr("Profit Analysis"));
-            content.AppendLine(Localizer.Do($"Margin per unit: {Text.Color(marginColor, Text.StyledNum(opp.Margin))}"));
+            content.AppendLine(Localizer.Do($"Currency: {currencyLink}"));
+            content.AppendLine(Localizer.Do($"Margin per unit: {Text.Color(marginColor, Text.StyledNum(opp.Margin))} {currencyLink}"));
             content.AppendLine(Localizer.Do($"Profit percentage: {Text.Color(marginColor, Text.StyledPercent(opp.ProfitPercent / 100f))}"));
             content.AppendLine(Localizer.Do($"Max tradeable: {Text.Info(opp.MaxQuantity.ToString())} units"));
             content.AppendLine(Localizer.Do($"Distance: {Text.Info($"{opp.Distance:F0}")} meters"));
-            content.AppendLine(Localizer.Do($"{Text.Bold("Total profit")}: {Text.Positive(Text.StyledNum(opp.TotalProfit))}"));
+            content.AppendLine(Localizer.Do($"{Text.Bold("Total profit")}: {Text.Positive(Text.StyledNum(opp.TotalProfit))} {currencyLink}"));
 
             player.OpenInfoPanel(
                 Localizer.Do($"Transport - {opp.ProductName}"),
@@ -459,108 +484,6 @@ namespace Eco.Mods.EcoTransportMod
     {
         [ChatCommand("Shows commands for market/economy data.", ChatAuthorizationLevel.User)]
         public static void Transport(User user) { }
-
-        [ChatSubCommand("Transport", "Shows global market statistics", "stats", ChatAuthorizationLevel.User)]
-        public static void Stats(User user)
-        {
-            EcoTransportModPlugin.DataService.RefreshAllData();
-            var opportunities = EcoTransportModPlugin.DataService.GetAllOpportunities();
-
-            if (!opportunities.Any())
-            {
-                user.Player?.MsgLocStr("No profitable opportunities found.");
-                return;
-            }
-
-            var sb = new StringBuilder();
-            sb.AppendLine(" ");
-            sb.AppendLine("╔══════════════════════════════════════════════════════════════");
-            sb.AppendLine("║       TRANSPORT - Trade Opportunities");
-            sb.AppendLine($"║  Opportunities: {opportunities.Count,-5}  |  Updated: {EcoTransportModPlugin.DataService.LastUpdate:HH:mm:ss}");
-            sb.AppendLine("╠══════════════════════════════════════════════════════════════");
-
-            foreach (var opp in opportunities.Take(10))
-            {
-                sb.AppendLine($"║  ► {opp.ProductName}");
-                sb.AppendLine($"║    Buy:  {opp.BuyFrom.Price,8:F2} x{opp.BuyFrom.Quantity,-4} @ {opp.BuyFrom.StoreName}");
-                sb.AppendLine($"║    Sell: {opp.SellTo.Price,8:F2} x{opp.SellTo.Quantity,-4} @ {opp.SellTo.StoreName}");
-                sb.AppendLine($"║    Margin: {opp.Margin,8:F2} | Qty: {opp.MaxQuantity} | Profit: {opp.TotalProfit:F2}");
-                sb.AppendLine("║");
-            }
-
-            if (opportunities.Count > 10)
-                sb.AppendLine($"║  ... and {opportunities.Count - 10} more opportunities.");
-
-            sb.AppendLine("╚══════════════════════════════════════════════════════════════");
-
-            user.Player?.MsgLocStr(sb.ToString());
-        }
-
-        [ChatSubCommand("Transport", "Search for a specific product", "search", ChatAuthorizationLevel.User)]
-        public static void Search(User user, string productName = "")
-        {
-            if (string.IsNullOrWhiteSpace(productName))
-            {
-                user.Player?.MsgLocStr("Usage: /transport search <product>");
-                return;
-            }
-
-            EcoTransportModPlugin.DataService.RefreshAllData();
-            var results = EcoTransportModPlugin.DataService.SearchOpportunities(productName);
-
-            if (!results.Any())
-            {
-                user.Player?.MsgLocStr($"No opportunities found matching '{productName}'.");
-                return;
-            }
-
-            var sb = new StringBuilder();
-            sb.AppendLine(" ");
-            sb.AppendLine("╔══════════════════════════════════════════════════════════════");
-            sb.AppendLine($"║  Search Results for: {productName}");
-            sb.AppendLine("╠══════════════════════════════════════════════════════════════");
-
-            foreach (var opp in results.Take(10))
-            {
-                sb.AppendLine($"║  ► {opp.ProductName}");
-                sb.AppendLine($"║    Buy:  {opp.BuyFrom.Price,8:F2} x{opp.BuyFrom.Quantity,-4} @ {opp.BuyFrom.StoreName}");
-                sb.AppendLine($"║    Sell: {opp.SellTo.Price,8:F2} x{opp.SellTo.Quantity,-4} @ {opp.SellTo.StoreName}");
-                sb.AppendLine($"║    Margin: {opp.Margin,8:F2} | Qty: {opp.MaxQuantity} | Profit: {opp.TotalProfit:F2}");
-                sb.AppendLine("║");
-            }
-
-            if (results.Count > 10)
-                sb.AppendLine($"║  ... and {results.Count - 10} more results.");
-
-            sb.AppendLine("╚══════════════════════════════════════════════════════════════");
-
-            user.Player?.MsgLocStr(sb.ToString());
-        }
-
-        [ChatSubCommand("Transport", "Export market data to JSON file", "export", ChatAuthorizationLevel.Admin)]
-        public static void Export(User user)
-        {
-            try
-            {
-                EcoTransportModPlugin.DataService.RefreshAllData();
-                var json = EcoTransportModPlugin.DataService.ExportToJson();
-
-                var filename = $"economy_export_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
-                var filepath = Path.Combine("Mods", "UserCode", "EcoTransportMod", filename);
-
-                var directory = Path.GetDirectoryName(filepath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                    Directory.CreateDirectory(directory);
-
-                File.WriteAllText(filepath, json);
-
-                user.Player?.MsgLocStr($"Market data exported to: {filepath}");
-            }
-            catch (Exception ex)
-            {
-                user.Player?.MsgLocStr($"Error exporting data: {ex.Message}");
-            }
-        }
 
         [ChatSubCommand("Transport", "Refresh market data cache", "refresh", ChatAuthorizationLevel.User)]
         public static void Refresh(User user)
@@ -577,17 +500,11 @@ namespace Eco.Mods.EcoTransportMod
             var sb = new StringBuilder();
             sb.AppendLine("=== Transport Commands Help ===");
             sb.AppendLine("");
-            sb.AppendLine("UI Panel Commands:");
             sb.AppendLine("  /transport panel - Open the main UI panel");
             sb.AppendLine("  /transport panel <n> - Show n items (max 200)");
             sb.AppendLine("  /transport find <product> - Search with UI panel");
             sb.AppendLine("  /transport detail <product> - Detailed product analysis");
-            sb.AppendLine("");
-            sb.AppendLine("Chat Commands:");
-            sb.AppendLine("  /transport stats - Show global market statistics");
-            sb.AppendLine("  /transport search <product> - Search for a specific product");
             sb.AppendLine("  /transport refresh - Refresh market data");
-            sb.AppendLine("  /transport export - Export data to JSON (Admin only)");
             sb.AppendLine("  /transport info - Show this help");
 
             user.Player?.MsgLocStr(sb.ToString());
