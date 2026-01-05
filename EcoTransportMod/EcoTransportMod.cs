@@ -12,6 +12,7 @@ namespace Eco.Mods.EcoTransportMod
     using Eco.Core.Plugins.Interfaces;
     using Eco.Core.Utils;
     using Eco.Gameplay.Components;
+    using Eco.Gameplay.Components.Storage;
     using Eco.Gameplay.Components.Store;
     using Eco.Gameplay.Items;
     using Eco.Gameplay.Objects;
@@ -118,6 +119,7 @@ namespace Eco.Mods.EcoTransportMod
         /// - Available quantity at buy store
         /// - Wanted quantity at sell store
         /// - Sell store's available balance to pay for items
+        /// - Sell store's storage capacity
         /// </summary>
         public int MaxQuantity
         {
@@ -134,8 +136,79 @@ namespace Eco.Mods.EcoTransportMod
                     baseLimit = Math.Min(baseLimit, affordableByStore);
                 }
 
+                // Check sell store storage capacity
+                if (!CanSellToStoreAcceptItems())
+                {
+                    return 0; // Store storage is full, cannot accept any items
+                }
+
                 return Math.Max(0, baseLimit);
             }
+        }
+
+        /// <summary>
+        /// Checks if the sell-to store has storage capacity to accept items
+        /// </summary>
+        private bool CanSellToStoreAcceptItems()
+        {
+            var (isFull, _, _, _, hasStorageLimit) = GetSellToStorageInfo();
+
+            // If no storage limit detected, assume can accept
+            if (!hasStorageLimit) return true;
+
+            // Can accept if not full
+            return !isFull;
+        }
+
+        /// <summary>
+        /// Gets the storage status of the sell-to store
+        /// Returns: (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit)
+        /// availableCapacity is the number of items that can be stored based on stack size
+        /// </summary>
+        public (bool isFull, int availableCapacity, int totalSlots, int usedSlots, bool hasStorageLimit) GetSellToStorageInfo()
+        {
+            if (SellTo?.Store == null || SellTo.ItemType == null)
+                return (false, int.MaxValue, 0, 0, false);
+
+            // Try to get LinkComponent to access linked storage
+            var linkComponent = SellTo.Store.GetComponent<LinkComponent>();
+            if (linkComponent == null)
+                return (false, int.MaxValue, 0, 0, false); // No link component
+
+            // Get linked inventories
+            var linkedInventories = linkComponent.GetSortedLinkedInventories(SellTo.Store.Owners);
+            if (linkedInventories == null)
+                return (false, int.MaxValue, 0, 0, false); // No linked inventories
+
+            // Get storage info from the linked inventories
+            int totalSlots = linkedInventories.Stacks.Count();
+            int usedSlots = linkedInventories.NonEmptyStacks.Count();
+            int availableSlots = totalSlots - usedSlots;
+            bool isFull = linkedInventories.IsFull;
+
+            // If no valid storage was found
+            if (totalSlots == 0)
+                return (false, int.MaxValue, 0, 0, false);
+
+            // Calculate available capacity based on item stack size
+            var item = Item.Get(SellTo.ItemType);
+            int maxStackSize = item?.MaxStackSize ?? 1;
+
+            // Calculate capacity considering:
+            // 1. Empty slots can hold maxStackSize items each
+            // 2. Partially filled stacks of the same item can hold more
+            int availableCapacity = availableSlots * maxStackSize;
+
+            // Check if there are existing stacks of this item that aren't full
+            foreach (var stack in linkedInventories.Stacks)
+            {
+                if (stack?.Item?.Type == SellTo.ItemType && stack.Quantity < maxStackSize)
+                {
+                    availableCapacity += (maxStackSize - stack.Quantity);
+                }
+            }
+
+            return (isFull, availableCapacity, totalSlots, usedSlots, true);
         }
 
         public float TotalCost => BuyFrom.Price * MaxQuantity;
@@ -405,20 +478,45 @@ namespace Eco.Mods.EcoTransportMod
             // Each opportunity on its own line
             foreach (var opp in opportunities.OrderByDescending(o => o.TotalProfit))
             {
-                var marginColor = opp.ProfitPercent >= 50 ? "#ADFF2F" : (opp.ProfitPercent >= 20 ? "#90EE90" : "#ADFF2F");
+                var marginColor = "#9CCD4F";
                 var currencyLink = opp.BuyFrom.GetCurrencyLink();
 
                 // Check if user can afford this opportunity
                 float userBalance = GetUserBalance(user, opp.BuyFrom.Currency);
                 bool canAfford = userBalance >= opp.TotalCost;
-                var totalCostColor = canAfford ? "#ADFF2F" : "#FF6B6B"; // Green if affordable, light red if not
+                var totalCostColor = canAfford ? "#9CCD4F" : "#FF6B6B"; // Green if affordable, light red if not
+
+                // Get storage info for sell-to store
+                var (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit) = opp.GetSellToStorageInfo();
 
                 content.AppendLine(Localizer.Do($"    - {opp.BuyFrom.GetStoreLink()}  →  {opp.SellTo.GetStoreLink()}"));
+
+                // Build storage status message - always show if has storage limit
+                string storageStatus = "";
+                if (hasStorageLimit)
+                {
+                    if (isFull)
+                    {
+                        storageStatus = Text.Color("#FF6B6B", "FULL - Cannot accept items");
+                    }
+                    else if (availableCapacity < opp.MaxQuantity)
+                    {
+                        storageStatus = Text.Color("#FFA500", $"Limited ({availableCapacity} items can fit)");
+                    }
+                    else
+                    {
+                        storageStatus = Text.Positive($"✓");
+                    }
+                }
                 var affordMsg = canAfford ? "" : $"  {Text.Color(totalCostColor, "(you only have " + Text.StyledNum(userBalance) + ")")}";
-                content.AppendLine(Localizer.Do($"      Buy at {Text.Negative(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))}            →            Sell at {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))}"));
-                content.AppendLine(Localizer.Do($"      Qty:  {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.MaxQuantity)))}          Margin:  {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.Margin)))}    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))}"));                
+                content.AppendLine(Localizer.Do($"      Buy x {Text.Info($"{opp.MaxQuantity}")} at {Text.Positive(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))} {currencyLink}            →            Sell at {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))} {currencyLink}"));
+                content.AppendLine(Localizer.Do($"      Total Investment:   {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink} {affordMsg} "));
+                if (hasStorageLimit)
+                {
+                    content.AppendLine(Localizer.Do($"      Storage capacity: {Text.Bold(storageStatus)}"));
+                }
                 content.AppendLine(Localizer.Do($"      Distance:   {Text.Info($"{opp.Distance:F0}")} meters"));
-                content.AppendLine(Localizer.Do($"      Total Cost:   {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink} {affordMsg} "));                
+                content.AppendLine(Localizer.Do($"      Margin:  {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.Margin)))}    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}"));
                 content.AppendLine();
             }
         }
@@ -479,12 +577,12 @@ namespace Eco.Mods.EcoTransportMod
         public static void ShowOpportunityDetail(Player player, User user, TradeOpportunity opp)
         {
             var content = new LocStringBuilder();
-            var marginColor = opp.ProfitPercent >= 50 ? "#ADFF2F" : (opp.ProfitPercent >= 20 ? "#90EE90" : "#ADFF2F");
+            var marginColor = "#9CCD4F";
 
             // Check if user can afford this opportunity
             float userBalance = GetUserBalance(user, opp.BuyFrom.Currency);
             bool canAfford = userBalance >= opp.TotalCost;
-            var totalCostColor = canAfford ? "#ADFF2F" : "#FF6B6B"; // Green if affordable, light red if not
+            var totalCostColor = canAfford ? "#9CCD4F" : "#FF6B6B"; // Green if affordable, light red if not
 
             // Item header
             content.AppendLine(TextLoc.HeaderLocStr("Trade Opportunity"));
@@ -509,6 +607,28 @@ namespace Eco.Mods.EcoTransportMod
             content.AppendLine(Localizer.Do($"Owner: {opp.SellTo.GetOwnerLink()}"));
             content.AppendLine(Localizer.Do($"Price: {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))} {currencyLink}"));
             content.AppendLine(Localizer.Do($"Wants: {Text.Info(opp.SellTo.Quantity.ToString())}"));
+
+            // Storage info
+            var (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit) = opp.GetSellToStorageInfo();
+            if (hasStorageLimit)
+            {
+                if (isFull)
+                {
+                    content.AppendLine(Localizer.Do($"Storage: {Text.Color("#FF6B6B", "FULL - Cannot accept items")}"));
+                }
+                else if (availableCapacity < opp.MaxQuantity)
+                {
+                    content.AppendLine(Localizer.Do($"Storage: {Text.Color("#FFA500", $"Limited ({availableCapacity} items can fit)")}"));
+                }
+                else
+                {
+                    content.AppendLine(Localizer.Do($"Storage: {Text.Positive($"{availableCapacity} units can fit")}"));
+                }
+            }
+            else
+            {
+                content.AppendLine(Localizer.Do($"Storage: {Text.Info("Unlimited")}"));
+            }
             content.AppendLine();
 
             // Profit analysis
@@ -518,7 +638,7 @@ namespace Eco.Mods.EcoTransportMod
             content.AppendLine(Localizer.Do($"Profit percentage: {Text.Bold(Text.Color(marginColor, Text.StyledPercent(opp.ProfitPercent / 100f)))}"));
             content.AppendLine(Localizer.Do($"Max tradeable: {Text.Info(opp.MaxQuantity.ToString())} units"));
             content.AppendLine(Localizer.Do($"Distance: {Text.Info($"{opp.Distance:F0}")} meters"));
-            content.AppendLine(Localizer.Do($"{Text.Bold("Total cost")}: {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink}"));
+            content.AppendLine(Localizer.Do($"{Text.Bold("Total investment")}: {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink}"));
             content.AppendLine(Localizer.Do($"{Text.Bold("Total profit")}: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}"));
 
             player.OpenInfoPanel(

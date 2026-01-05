@@ -23,6 +23,8 @@ Reboot your server and it's done !
 - Filter by matching currency (buy and sell must use same currency)
 - Native Eco UI with clickable links for stores, items and currencies
 - Distance calculation between buy/sell locations
+- Check you can afford the investment
+- Check buyer's can afford the delivery, and have available storage.
 
 ## Usage
 
@@ -52,7 +54,6 @@ Contributions and bug reports are welcome !
 - Add filtering on player's skill production & player's own materials
 - Add config command : learned skill, transport method(cart, truck) 
 - Add transportation info (number of trips required)
-- Add
 - [New Skill] Add a configurable variable for admins to make it a skill, which locks all features except public ones behind it.
 - [Skill Feature] Add automatique itinerary suggestion.
-- [Public Feature] Add feature DeliveryOpportunity which allow any user to place an order with delivery, and transporter (only) to answer it.
+- [Public Feature] Add feature DeliveryOpportunity which allow any user to place an order with delivery, and transporter (only) to answer it. Would probably take benefit of contracts.
