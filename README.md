@@ -34,10 +34,12 @@ See available commands by typing `/transport info`
 
 | Command | Description |
 | ------- | ----------- |
+| `/transport panel` | Open the main UI panel |
 | `/transport panel [n]` | Open the main UI panel (max 200 items) |
 | `/transport find <product>` | Search with UI panel |
 | `/transport detail <product>` | Detailed product analysis |
 | `/transport refresh` | Refresh market data |
+| `/transport stats` | Show usage statistics by player |
 | `/transport info` | Show help |
 
 

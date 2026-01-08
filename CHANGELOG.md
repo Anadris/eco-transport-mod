@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.3.0
+
+### Added
+- **New Skills System**: Introduces Transporter profession and Logistics specialty
+  - `TransporterSkill`: Profession skill, foundation for transportation specialists
+  - `LogisticsSkill`: Specialty skill with powerful bonuses
+    - Multiplicative bonuses: -20% to -50% resource cost reduction (levels 1-7) TBM
+    - Additive bonuses: +50% to +80% output increase (levels 1-7) TBM
+    - Carry weight bonus: +1000kg per level (up to +7000kg at level 7) TBM
+    - Movement speed bonus: +2% per level (up to +14% at level 7) TBM
+  - Skill book recipe craftable at Research Table
+  - Custom icons for skills via Unity AssetBundle
+- Usage statistics tracking: all transport commands now track usage by player with timestamps
+- `/transport stats` command: displays comprehensive usage statistics
+  - Shows total command usage (all time and last 24 hours)
+  - Breaks down statistics by command type (panel, find, detail, refresh, info, stats)
+- All commands now record usage with timestamp: panel, find, detail, refresh, info, stats
+
+### Technical
+- Added Unity AssetBundle support for custom skill icons
+- Bundle name: `ecotransport.unity3d` in `/Assets/` folder
+- Skill bonuses ready for future Harmony patch integration
+
 ## v1.2.0
 
 ### Added

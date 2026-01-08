@@ -33,6 +33,7 @@ namespace Eco.Mods.EcoTransportMod
     {
         public static EcoTransportModPlugin Instance { get; private set; }
         public static EconomyDataService DataService { get; private set; }
+        public static UsageStatsService StatsService { get; private set; }
 
         public string GetCategory() => Localizer.DoStr("Economy");
         public string GetStatus() => Localizer.DoStr("Running");
@@ -43,11 +44,143 @@ namespace Eco.Mods.EcoTransportMod
             Instance = this;
             DataService = new EconomyDataService();
             DataService.Initialize();
+            StatsService = new UsageStatsService();
         }
 
         public System.Threading.Tasks.Task ShutdownAsync()
         {
             return System.Threading.Tasks.Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Represents a single usage record
+    /// </summary>
+    public class UsageRecord
+    {
+        public string PlayerName { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
+
+    /// <summary>
+    /// Service for tracking command usage statistics
+    /// </summary>
+    public class UsageStatsService
+    {
+        private readonly Dictionary<string, List<UsageRecord>> _usageByCommand = new Dictionary<string, List<UsageRecord>>();
+        private readonly ReaderWriterLockSlim _lock = new ReaderWriterLockSlim();
+
+        /// <summary>
+        /// Records a command usage by a player
+        /// </summary>
+        public void RecordUsage(User user, string commandName)
+        {
+            if (user == null || string.IsNullOrEmpty(commandName)) return;
+
+            _lock.EnterWriteLock();
+            try
+            {
+                if (!_usageByCommand.ContainsKey(commandName))
+                {
+                    _usageByCommand[commandName] = new List<UsageRecord>();
+                }
+
+                _usageByCommand[commandName].Add(new UsageRecord
+                {
+                    PlayerName = user.Name,
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// Gets usage statistics for a specific command sorted by count (descending) (internal, no lock)
+        /// </summary>
+        private List<(string PlayerName, int Count)> GetCommandStatsInternal(string commandName, TimeSpan? timeWindow = null)
+        {
+            if (!_usageByCommand.ContainsKey(commandName))
+                return new List<(string, int)>();
+
+            var records = _usageByCommand[commandName];
+
+            // Filter by time window if specified
+            if (timeWindow.HasValue)
+            {
+                var cutoffTime = DateTime.UtcNow - timeWindow.Value;
+                records = records.Where(r => r.Timestamp >= cutoffTime).ToList();
+            }
+
+            return records
+                .GroupBy(r => r.PlayerName)
+                .Select(g => (g.Key, g.Count()))
+                .OrderByDescending(x => x.Item2)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Gets usage statistics for a specific command sorted by count (descending)
+        /// </summary>
+        public List<(string PlayerName, int Count)> GetCommandStats(string commandName, TimeSpan? timeWindow = null)
+        {
+            _lock.EnterReadLock();
+            try
+            {
+                return GetCommandStatsInternal(commandName, timeWindow);
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Gets all usage statistics grouped by command
+        /// </summary>
+        public Dictionary<string, List<(string PlayerName, int Count)>> GetAllStats(TimeSpan? timeWindow = null)
+        {
+            _lock.EnterReadLock();
+            try
+            {
+                var result = new Dictionary<string, List<(string, int)>>();
+                foreach (var command in _usageByCommand.Keys)
+                {
+                    var stats = GetCommandStatsInternal(command, timeWindow);
+                    if (stats.Any())
+                    {
+                        result[command] = stats;
+                    }
+                }
+                return result;
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Gets total usage count for all commands
+        /// </summary>
+        public int GetTotalUsageCount(TimeSpan? timeWindow = null)
+        {
+            _lock.EnterReadLock();
+            try
+            {
+                if (timeWindow.HasValue)
+                {
+                    var cutoffTime = DateTime.UtcNow - timeWindow.Value;
+                    return _usageByCommand.Values.Sum(list => list.Count(r => r.Timestamp >= cutoffTime));
+                }
+                return _usageByCommand.Values.Sum(list => list.Count);
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
         }
     }
 
@@ -657,6 +790,7 @@ namespace Eco.Mods.EcoTransportMod
         [ChatSubCommand("Transport", "Refresh market data cache", "refresh", ChatAuthorizationLevel.User)]
         public static void Refresh(User user)
         {
+            EcoTransportModPlugin.StatsService.RecordUsage(user, "refresh");
             EcoTransportModPlugin.DataService.RefreshAllData();
             var opportunities = EcoTransportModPlugin.DataService.GetAllOpportunities(user);
 
@@ -666,6 +800,7 @@ namespace Eco.Mods.EcoTransportMod
         [ChatSubCommand("Transport", "Show help for transport commands", "info", ChatAuthorizationLevel.User)]
         public static void Info(User user)
         {
+            EcoTransportModPlugin.StatsService.RecordUsage(user, "info");
             var sb = new StringBuilder();
             sb.AppendLine("=== Transport Commands Help ===");
             sb.AppendLine("");
@@ -674,9 +809,126 @@ namespace Eco.Mods.EcoTransportMod
             sb.AppendLine("  /transport find <product> - Search with UI panel");
             sb.AppendLine("  /transport detail <product> - Detailed product analysis");
             sb.AppendLine("  /transport refresh - Refresh market data");
+            sb.AppendLine("  /transport stats - Show usage statistics");
             sb.AppendLine("  /transport info - Show this help");
 
             user.Player?.MsgLocStr(sb.ToString());
+        }
+
+        [ChatSubCommand("Transport", "Show command usage statistics by player", "stats", ChatAuthorizationLevel.User)]
+        public static void Stats(User user)
+        {
+            EcoTransportModPlugin.StatsService.RecordUsage(user, "stats");
+
+            if (user.Player == null)
+            {
+                user.MsgLocStr("This command requires an active player.");
+                return;
+            }
+
+            var allStats = EcoTransportModPlugin.StatsService.GetAllStats();
+            var last24hStats = EcoTransportModPlugin.StatsService.GetAllStats(TimeSpan.FromHours(24));
+
+            var content = new LocStringBuilder();
+
+            content.AppendLine();
+            content.AppendLine(TextLoc.HeaderLocStr("Transport Command Usage Statistics"));
+            content.AppendLine();
+
+            if (!allStats.Any())
+            {
+                content.AppendLineLocStr("No usage data available yet.");
+                content.AppendLineLocStr("Use /transport commands to start tracking.");
+                user.Player.OpenInfoPanel(
+                    Localizer.DoStr("Transport - Usage Stats"),
+                    content.ToLocString(),
+                    "transport-stats-panel");
+                return;
+            }
+
+            int totalUsage = EcoTransportModPlugin.StatsService.GetTotalUsageCount();
+            int last24hUsage = EcoTransportModPlugin.StatsService.GetTotalUsageCount(TimeSpan.FromHours(24));
+            content.AppendLine(Localizer.Do($"Total commands (all time): {Text.Positive(totalUsage.ToString())}"));
+            content.AppendLine(Localizer.Do($"Last 24 hours: {Text.Info(last24hUsage.ToString())}"));
+            content.AppendLine();
+
+            // Show stats for each command
+            foreach (var commandStats in allStats.OrderByDescending(x => x.Value.Sum(s => s.Count)))
+            {
+                string commandName = commandStats.Key;
+                var playerStats = commandStats.Value;
+                int commandTotal = playerStats.Sum(s => s.Count);
+
+                // Get 24h stats for this command
+                int command24hTotal = 0;
+                List<(string, int)> player24hStats = new List<(string, int)>();
+                if (last24hStats.ContainsKey(commandName))
+                {
+                    player24hStats = last24hStats[commandName];
+                    command24hTotal = player24hStats.Sum(s => s.Item2);
+                }
+
+                content.AppendLine(TextLoc.HeaderLocStr($"/{commandName}"));
+                content.AppendLine(Localizer.Do($"All time: {Text.Positive(commandTotal.ToString())} uses  |  Last 24h: {Text.Info(command24hTotal.ToString())} uses  |  Unique players: {Text.Info(playerStats.Count.ToString())}"));
+                content.AppendLine();
+
+                // Show all-time top 10
+                content.AppendLine(Localizer.Do($"{Text.Bold("All Time Top 10:")}"));
+                int rank = 1;
+                foreach (var (playerName, count) in playerStats.Take(10))
+                {
+                    var rankText = rank <= 3 ? Text.Bold($"#{rank}") : $"#{rank}";
+                    var countText = Text.Positive(count.ToString());
+
+                    // Get player object for tooltip
+                    var player = UserManager.FindUserByName(playerName);
+                    var playerLink = player != null ? player.UILink() : Localizer.DoStr(playerName);
+
+                    content.AppendLine(Localizer.Do($"  {rankText}  {playerLink}: {countText} times"));
+                    rank++;
+                }
+
+                if (playerStats.Count > 10)
+                {
+                    content.AppendLine(Localizer.Do($"  ... and {Text.Info((playerStats.Count - 10).ToString())} more players"));
+                }
+                content.AppendLine();
+
+                // Show 24h stats if available
+                if (player24hStats.Any())
+                {
+                    content.AppendLine(Localizer.Do($"{Text.Bold("Last 24 Hours Top 10:")}"));
+                    rank = 1;
+                    foreach (var (playerName, count) in player24hStats.Take(10))
+                    {
+                        var rankText = rank <= 3 ? Text.Bold($"#{rank}") : $"#{rank}";
+                        var countText = Text.Info(count.ToString());
+
+                        // Get player object for tooltip
+                        var player = UserManager.FindUserByName(playerName);
+                        var playerLink = player != null ? player.UILink() : Localizer.DoStr(playerName);
+
+                        content.AppendLine(Localizer.Do($"  {rankText}  {playerLink}: {countText} times"));
+                        rank++;
+                    }
+
+                    if (player24hStats.Count > 10)
+                    {
+                        content.AppendLine(Localizer.Do($"  ... and {Text.Info((player24hStats.Count - 10).ToString())} more players"));
+                    }
+                }
+                else
+                {
+                    content.AppendLine(Localizer.Do($"{Text.Bold("Last 24 Hours:")} No usage"));
+                }
+
+                content.AppendLine();
+            }
+
+            user.Player.OpenInfoPanel(
+                Localizer.DoStr("Transport - Usage Stats"),
+                content.ToLocString(),
+                "transport-stats-panel");
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -695,6 +947,7 @@ namespace Eco.Mods.EcoTransportMod
             if (maxItems < 1) maxItems = 1;
             if (maxItems > 200) maxItems = 200;
 
+            EcoTransportModPlugin.StatsService.RecordUsage(user, "panel");
             TransportUIBuilder.ShowStatsPanel(user.Player, user, maxItems);
         }
 
@@ -713,6 +966,7 @@ namespace Eco.Mods.EcoTransportMod
                 return;
             }
 
+            EcoTransportModPlugin.StatsService.RecordUsage(user, "find");
             TransportUIBuilder.ShowSearchPanel(user.Player, user, productName);
         }
 
@@ -731,6 +985,7 @@ namespace Eco.Mods.EcoTransportMod
                 return;
             }
 
+            EcoTransportModPlugin.StatsService.RecordUsage(user, "detail");
             EcoTransportModPlugin.DataService.RefreshAllData();
             var results = EcoTransportModPlugin.DataService.SearchOpportunities(productName, user);
 
