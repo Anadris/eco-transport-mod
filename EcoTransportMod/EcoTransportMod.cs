@@ -25,6 +25,19 @@ namespace Eco.Mods.EcoTransportMod
     using Eco.Shared.Utils;
     using Eco.Gameplay.Economy;
     using Eco.Gameplay.Aliases;
+    using Eco.Mods.TechTree;
+
+    // ═══════════════════════════════════════════════════════════════
+    // CONFIGURATION - Modify these values to customize the mod
+    // ═══════════════════════════════════════════════════════════════
+    public static class EcoTransportModConfig
+    {
+        /// <summary>
+        /// Set to true to require Logistics skill level 1 for all /transport commands
+        /// Set to false to allow all players to use commands without skill requirement
+        /// </summary>
+        public const bool REQUIRE_LOGISTICS_SKILL = true;
+    }
 
     /// <summary>
     /// Main plugin class for EcoTransportMod
@@ -376,6 +389,42 @@ namespace Eco.Mods.EcoTransportMod
     }
 
     /// <summary>
+    /// Represents a stop in a delivery route
+    /// </summary>
+    public class RouteStop
+    {
+        public TradeOpportunity Opportunity { get; set; }
+        public int StopNumber { get; set; }
+        public float DistanceFromPreviousStop { get; set; }
+        public float CumulativeDistance { get; set; }
+        public float CumulativeProfit { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a complete delivery route with multiple stops
+    /// </summary>
+    public class DeliveryRoute
+    {
+        public List<RouteStop> Stops { get; set; } = new List<RouteStop>();
+        public float TotalDistance { get; set; }
+        public float TotalProfit { get; set; }
+        public float TotalCost { get; set; }
+        public float EfficiencyRatio => TotalDistance > 0 ? TotalProfit / TotalDistance : 0;
+
+        public int StopCount => Stops.Count;
+
+        /// <summary>
+        /// Get the starting store (first buy location)
+        /// </summary>
+        public WorldObject StartStore => Stops.FirstOrDefault()?.Opportunity.BuyFrom.Store;
+
+        /// <summary>
+        /// Get the ending store (last sell location)
+        /// </summary>
+        public WorldObject EndStore => Stops.LastOrDefault()?.Opportunity.SellTo.Store;
+    }
+
+    /// <summary>
     /// Service that collects all store offers and finds profitable trade opportunities
     /// </summary>
     public class EconomyDataService
@@ -503,6 +552,103 @@ namespace Eco.Mods.EcoTransportMod
             }
         }
 
+        /// <summary>
+        /// Finds optimized delivery routes by chaining opportunities where sell location becomes next buy location
+        /// </summary>
+        public List<DeliveryRoute> FindOptimizedRoutes(User requestingUser, int maxResults = 10)
+        {
+            var allOpportunities = GetAllOpportunities(requestingUser);
+            var routes = new List<DeliveryRoute>();
+            var visited = new HashSet<string>();
+
+            // Start from each opportunity and try to build chains
+            foreach (var startOpp in allOpportunities)
+            {
+                var route = new DeliveryRoute();
+                var currentOpps = new List<TradeOpportunity> { startOpp };
+                var routeKey = $"{startOpp.BuyFrom.Store.ID}_{startOpp.SellTo.Store.ID}_{startOpp.BuyFrom.ProductId}";
+
+                if (visited.Contains(routeKey))
+                    continue;
+
+                BuildRouteRecursive(startOpp, allOpportunities, route, new HashSet<WorldObject>(), visited);
+
+                if (route.Stops.Count > 0)
+                {
+                    routes.Add(route);
+                }
+            }
+
+            // Sort by total profit descending, then by efficiency ratio, then by number of stops
+            return routes
+                .OrderByDescending(r => r.TotalProfit)
+                .ThenByDescending(r => r.EfficiencyRatio)
+                .ThenByDescending(r => r.StopCount)
+                .Take(maxResults)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Recursively builds a route by chaining compatible opportunities
+        /// </summary>
+        private void BuildRouteRecursive(
+            TradeOpportunity currentOpp,
+            List<TradeOpportunity> allOpportunities,
+            DeliveryRoute route,
+            HashSet<WorldObject> visitedStores,
+            HashSet<string> globalVisited)
+        {
+            // Add current opportunity as a stop
+            var stopNumber = route.Stops.Count + 1;
+            var prevStop = route.Stops.LastOrDefault();
+
+            float distanceFromPrevious = 0f;
+            if (prevStop != null)
+            {
+                // Distance from previous sell location to current buy location
+                var pos1 = prevStop.Opportunity.SellTo.Store.Position3i;
+                var pos2 = currentOpp.BuyFrom.Store.Position3i;
+                distanceFromPrevious = (float)Math.Sqrt(
+                    Math.Pow(pos2.X - pos1.X, 2) +
+                    Math.Pow(pos2.Y - pos1.Y, 2) +
+                    Math.Pow(pos2.Z - pos1.Z, 2));
+            }
+
+            var newStop = new RouteStop
+            {
+                Opportunity = currentOpp,
+                StopNumber = stopNumber,
+                DistanceFromPreviousStop = distanceFromPrevious,
+                CumulativeDistance = (prevStop?.CumulativeDistance ?? 0) + currentOpp.Distance,
+                CumulativeProfit = (prevStop?.CumulativeProfit ?? 0) + currentOpp.TotalProfit
+            };
+
+            route.Stops.Add(newStop);
+            route.TotalDistance = newStop.CumulativeDistance;
+            route.TotalProfit = newStop.CumulativeProfit;
+            route.TotalCost += currentOpp.TotalCost;
+
+            // Mark stores as visited to prevent loops
+            visitedStores.Add(currentOpp.BuyFrom.Store);
+            visitedStores.Add(currentOpp.SellTo.Store);
+
+            // Find next opportunities where current sell location matches next buy location
+            var nextOpportunities = allOpportunities
+                .Where(opp =>
+                    opp.BuyFrom.Store == currentOpp.SellTo.Store && // Chain: sell here, buy from here
+                    !visitedStores.Contains(opp.SellTo.Store) && // Don't revisit stores
+                    opp.BuyFrom.Currency == currentOpp.SellTo.Currency) // Same currency
+                .OrderByDescending(opp => opp.TotalProfit)
+                .ToList();
+
+            // If we found compatible next stops, continue with the best one
+            if (nextOpportunities.Any())
+            {
+                var nextOpp = nextOpportunities.First();
+                BuildRouteRecursive(nextOpp, allOpportunities, route, visitedStores, globalVisited);
+            }
+        }
+
         public List<TradeOpportunity> SearchOpportunities(string searchTerm, User requestingUser)
         {
             var allData = GetAllOpportunities(requestingUser);
@@ -554,9 +700,26 @@ namespace Eco.Mods.EcoTransportMod
             content.AppendLine();
             content.AppendLine(Localizer.Do($"Trade opportunities: {Text.Positive(opportunities.Count)}        Updated: {Text.Info(EcoTransportModPlugin.DataService.LastUpdate.ToString("HH:mm:ss"))}"));
 
-            // Calculate total potential profit
-            float totalPotentialProfit = opportunities.Sum(o => o.TotalProfit);
-            content.AppendLine(Localizer.Do($"Total potential profit: {Text.Positive(Text.StyledNum(totalPotentialProfit))}"));
+            // Calculate total potential profit grouped by currency
+            var profitByCurrency = opportunities
+                .GroupBy(o => o.BuyFrom.Currency)
+                .Select(g => new
+                {
+                    Currency = g.Key,
+                    TotalProfit = g.Sum(o => o.TotalProfit)
+                })
+                .OrderByDescending(x => x.TotalProfit);
+
+            content.Append(Localizer.DoStr("Total potential profit: "));
+            bool first = true;
+            foreach (var profitGroup in profitByCurrency)
+            {
+                if (!first) content.Append(Localizer.DoStr("  |  "));
+                var currencyLink = profitGroup.Currency != null ? profitGroup.Currency.UILink() : Text.Info("Unknown");
+                content.Append(Localizer.Do($"{Text.Positive(Text.StyledNum(profitGroup.TotalProfit))} {currencyLink}"));
+                first = false;
+            }
+            content.AppendLine();
             content.AppendLine();
 
             // Group by product
@@ -779,17 +942,147 @@ namespace Eco.Mods.EcoTransportMod
                 content.ToLocString(),
                 "transport-detail");
         }
+
+        /// <summary>
+        /// Opens the routes panel showing optimized multi-stop delivery routes
+        /// </summary>
+        public static void ShowRoutesPanel(Player player, User user, List<DeliveryRoute> routes)
+        {
+            var content = new LocStringBuilder();
+
+            // Header
+            content.AppendLine();
+            content.AppendLine(TextLoc.HeaderLocStr("Optimized Delivery Routes"));
+            content.AppendLine();
+            content.AppendLine(Localizer.Do($"Found {Text.Positive(routes.Count.ToString())} multi-stop routes        Updated: {Text.Info(EcoTransportModPlugin.DataService.LastUpdate.ToString("HH:mm:ss"))}"));
+
+            // Calculate total potential profit from all routes grouped by currency
+            var profitByCurrency = routes
+                .SelectMany(r => r.Stops)
+                .GroupBy(s => s.Opportunity.BuyFrom.Currency)
+                .Select(g => new
+                {
+                    Currency = g.Key,
+                    TotalProfit = g.Sum(s => s.Opportunity.TotalProfit)
+                })
+                .OrderByDescending(x => x.TotalProfit);
+
+            content.Append(Localizer.DoStr("Total potential profit: "));
+            bool first = true;
+            foreach (var profitGroup in profitByCurrency)
+            {
+                if (!first) content.Append(Localizer.DoStr("  |  "));
+                var currencyLink = profitGroup.Currency != null ? profitGroup.Currency.UILink() : Text.Info("Unknown");
+                content.Append(Localizer.Do($"{Text.Positive(Text.StyledNum(profitGroup.TotalProfit))} {currencyLink}"));
+                first = false;
+            }
+            content.AppendLine();
+            content.AppendLine();
+
+            int routeNumber = 1;
+            foreach (var route in routes)
+            {
+                // Route header
+                content.AppendLine(TextLoc.HeaderLocStr($"Route #{routeNumber}"));
+                content.AppendLine();
+
+                // Route summary
+                var currencyLink = route.Stops.First().Opportunity.BuyFrom.GetCurrencyLink();
+                var currency = route.Stops.First().Opportunity.BuyFrom.Currency;
+                var startStoreLink = route.StartStore.UILink();
+                var endStoreLink = route.EndStore.UILink();
+
+                // Check if user can afford this route
+                float userBalance = GetUserBalance(user, currency);
+                bool canAfford = userBalance >= route.TotalCost;
+                var totalCostColor = canAfford ? "#9CCD4F" : "#FF6B6B"; // Green if affordable, light red if not
+                var affordMsg = canAfford ? "" : $"  {Text.Color(totalCostColor, "(you only have " + Text.StyledNum(userBalance) + ")")}";
+
+                content.AppendLine(Localizer.Do($"Total Investment: {Text.Color(totalCostColor, Text.Bold(route.TotalCost.ToString()))} {currencyLink}{affordMsg}        Total Profit: {Text.Positive(Text.Bold(Text.StyledNum(route.TotalProfit)))} {currencyLink}"));
+                content.AppendLine(Localizer.Do($"Stops: {Text.Info(route.StopCount.ToString())}        Distance: {Text.Info($"{route.TotalDistance:F0}")} meters        Efficiency: {Text.Info($"{route.EfficiencyRatio:F2}")} profit/meter"));
+                content.AppendLine();
+
+                // Individual stops
+                foreach (var stop in route.Stops)
+                {
+                    var opp = stop.Opportunity;
+                    content.AppendLine(Localizer.Do($"  {Text.Color(Color.Orange, Text.Bold($"Stop {stop.StopNumber}"))} - {opp.GetItemLink()}"));
+
+                    content.AppendLine(Localizer.Do($"    {opp.BuyFrom.GetStoreLink()}  →  {opp.SellTo.GetStoreLink()}"));
+                    content.AppendLine(Localizer.Do($"    Buy x{Text.Info(opp.MaxQuantity.ToString())} at {Text.Positive(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))} {currencyLink}  →  Sell at {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))} {currencyLink}"));
+
+                    // Storage info for sell-to store
+                    var (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit) = opp.GetSellToStorageInfo();
+                    string storageStatus = "";
+                    if (hasStorageLimit)
+                    {
+                        if (isFull)
+                        {
+                            storageStatus = $"    |    Storage: {Text.Color("#FF6B6B", "FULL")}";
+                        }
+                        else if (availableCapacity < opp.MaxQuantity)
+                        {
+                            storageStatus = $"    |    Storage: {Text.Color("#FFA500", $"Limited ({availableCapacity})")}";
+                        }
+                        else
+                        {
+                            storageStatus = $"    |    Storage: {Text.Positive("✓")}";
+                        }
+                    }
+
+                    content.AppendLine(Localizer.Do($"    Distance: {Text.Info($"{opp.Distance:F0}")}m    |    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}{storageStatus}"));
+                    content.AppendLine();
+                }
+
+                content.AppendLine();
+                routeNumber++;
+            }
+
+            player.OpenInfoPanel(
+                Localizer.DoStr("Transport - Optimized Routes"),
+                content.ToLocString(),
+                "transport-routes");
+        }
     }
 
     [ChatCommandHandler]
     public static class TransportCommands
     {
-        [ChatCommand("Shows commands for market/economy data.", ChatAuthorizationLevel.User)]
+        /// <summary>
+        /// Checks if the user has the Logistics skill level 1 required to use transport commands
+        /// </summary>
+        private static bool HasRequiredLogisticsSkill(User user)
+        {
+            // If skill requirement is disabled in config, allow all users
+            if (!EcoTransportModConfig.REQUIRE_LOGISTICS_SKILL)
+                return true;
+
+            // Otherwise, check for Logistics skill level 1+
+            if (user?.Skillset == null) return false;
+            var logisticsSkill = user.Skillset.GetSkill(typeof(LogisticsSkill));
+            return logisticsSkill != null && logisticsSkill.Level >= 1;
+        }
+
+        /// <summary>
+        /// Shows an error message to users without the required skill
+        /// </summary>
+        private static void ShowSkillRequiredMessage(User user)
+        {
+            user.Player?.MsgLocStr($"{Text.Error("Transport commands require Logistics skill level 1.")}\nLearn the Logistics specialty and level it up to access market analysis features.");
+        }
+
+        [ChatCommand("Shows commands for market/economy data. Requires Logistics skill level 1.", ChatAuthorizationLevel.User)]
         public static void Transport(User user) { }
 
         [ChatSubCommand("Transport", "Refresh market data cache", "refresh", ChatAuthorizationLevel.User)]
         public static void Refresh(User user)
         {
+            if (!HasRequiredLogisticsSkill(user))
+            {
+                ShowSkillRequiredMessage(user);
+                return;
+            }
+
             EcoTransportModPlugin.StatsService.RecordUsage(user, "refresh");
             EcoTransportModPlugin.DataService.RefreshAllData();
             var opportunities = EcoTransportModPlugin.DataService.GetAllOpportunities(user);
@@ -800,12 +1093,19 @@ namespace Eco.Mods.EcoTransportMod
         [ChatSubCommand("Transport", "Show help for transport commands", "info", ChatAuthorizationLevel.User)]
         public static void Info(User user)
         {
+            if (!HasRequiredLogisticsSkill(user))
+            {
+                ShowSkillRequiredMessage(user);
+                return;
+            }
+
             EcoTransportModPlugin.StatsService.RecordUsage(user, "info");
             var sb = new StringBuilder();
             sb.AppendLine("=== Transport Commands Help ===");
             sb.AppendLine("");
             sb.AppendLine("  /transport panel - Open the main UI panel");
             sb.AppendLine("  /transport panel <n> - Show n items (max 200)");
+            sb.AppendLine("  /transport route [max] - Find optimized multi-stop routes");
             sb.AppendLine("  /transport find <product> - Search with UI panel");
             sb.AppendLine("  /transport detail <product> - Detailed product analysis");
             sb.AppendLine("  /transport refresh - Refresh market data");
@@ -818,6 +1118,12 @@ namespace Eco.Mods.EcoTransportMod
         [ChatSubCommand("Transport", "Show command usage statistics by player", "stats", ChatAuthorizationLevel.User)]
         public static void Stats(User user)
         {
+            if (!HasRequiredLogisticsSkill(user))
+            {
+                ShowSkillRequiredMessage(user);
+                return;
+            }
+
             EcoTransportModPlugin.StatsService.RecordUsage(user, "stats");
 
             if (user.Player == null)
@@ -938,6 +1244,12 @@ namespace Eco.Mods.EcoTransportMod
         [ChatSubCommand("Transport", "Opens the market data panel with native UI", "panel", ChatAuthorizationLevel.User)]
         public static void Panel(User user, int maxItems = 50)
         {
+            if (!HasRequiredLogisticsSkill(user))
+            {
+                ShowSkillRequiredMessage(user);
+                return;
+            }
+
             if (user.Player == null)
             {
                 user.MsgLocStr("This command requires an active player.");
@@ -954,6 +1266,12 @@ namespace Eco.Mods.EcoTransportMod
         [ChatSubCommand("Transport", "Search for products with native UI panel", "find", ChatAuthorizationLevel.User)]
         public static void Find(User user, string productName = "")
         {
+            if (!HasRequiredLogisticsSkill(user))
+            {
+                ShowSkillRequiredMessage(user);
+                return;
+            }
+
             if (user.Player == null)
             {
                 user.MsgLocStr("This command requires an active player.");
@@ -970,9 +1288,47 @@ namespace Eco.Mods.EcoTransportMod
             TransportUIBuilder.ShowSearchPanel(user.Player, user, productName);
         }
 
+        [ChatSubCommand("Transport", "Find optimized multi-stop delivery routes", "route", ChatAuthorizationLevel.User)]
+        public static void Route(User user, int maxRoutes = 10)
+        {
+            if (!HasRequiredLogisticsSkill(user))
+            {
+                ShowSkillRequiredMessage(user);
+                return;
+            }
+
+            if (user.Player == null)
+            {
+                user.MsgLocStr("This command requires an active player.");
+                return;
+            }
+
+            if (maxRoutes < 1) maxRoutes = 1;
+            if (maxRoutes > 20) maxRoutes = 20;
+
+            EcoTransportModPlugin.StatsService.RecordUsage(user, "route");
+            EcoTransportModPlugin.DataService.RefreshAllData();
+
+            var routes = EcoTransportModPlugin.DataService.FindOptimizedRoutes(user, maxRoutes);
+
+            if (!routes.Any())
+            {
+                user.Player.MsgLocStr("No multi-stop routes found. Try building more stores with compatible trade opportunities.");
+                return;
+            }
+
+            TransportUIBuilder.ShowRoutesPanel(user.Player, user, routes);
+        }
+
         [ChatSubCommand("Transport", "Show detailed info for a specific product", "detail", ChatAuthorizationLevel.User)]
         public static void Detail(User user, string productName = "")
         {
+            if (!HasRequiredLogisticsSkill(user))
+            {
+                ShowSkillRequiredMessage(user);
+                return;
+            }
+
             if (user.Player == null)
             {
                 user.MsgLocStr("This command requires an active player.");
