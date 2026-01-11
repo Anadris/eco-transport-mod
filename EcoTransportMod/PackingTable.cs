@@ -70,6 +70,25 @@ namespace Eco.Mods.TechTree
         public override LocString DisplayName => Localizer.DoStr("Packing Table");
         public override TableTextureMode TableTexture => TableTextureMode.Wood;
 
+        static PackingTableObject()
+        {
+            // Occupancy: 1 bloc de large (x), 3 blocs de haut (y), 2 blocs de profondeur (z)
+            // Offset Unity: (0, 0, 0)
+            WorldObject.AddOccupancy<PackingTableObject>(new List<BlockOccupancy>(){
+                // Niveau 0 (sol) - profondeur z=0 et z=1
+                new BlockOccupancy(new Vector3i(0, 0, 0)),
+                new BlockOccupancy(new Vector3i(0, 0, 1)),
+
+                // Niveau 1
+                new BlockOccupancy(new Vector3i(0, 1, 0)),
+                new BlockOccupancy(new Vector3i(0, 1, 1)),
+
+                // Niveau 2
+                new BlockOccupancy(new Vector3i(0, 2, 0)),
+                new BlockOccupancy(new Vector3i(0, 2, 1))
+            });
+        }
+
         protected override void Initialize()
         {
             this.ModsPreInitialize();

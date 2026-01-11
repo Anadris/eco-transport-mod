@@ -27,6 +27,16 @@
   - Crafted at Workbench with 20 Wood + 50 Wood Pulp
   - Supports Basic Upgrade modules
   - Located in Ecopedia: Work Stations > Craft Tables
+- **Wooden Mail Box**: Basic storage solution for mail and packages
+  - Requires Logistics skill level 2
+  - Crafted at Packing Table with 20 Package Box and 5 Hewn Log
+  - 5 storage slots
+  - Provides 3 housing points in Outdoor category
+- **Iron Mail Box**: Advanced storage solution for mail and packages
+  - Requires Logistics skill level 4
+  - Crafted at Packing Table with 20 Package Box and 2 Iron Bar
+  - 10 storage slots
+  - Provides 4 housing points in Outdoor category
 - **New Packaging Items**: Complete packaging supply chain
   - **Wood Paste** (Logistics lvl 1): 2 Wood + 2 Dirt → 5 Wood Paste
   - **Tape Roll** (Logistics lvl 1): 1 Fruit + 2 Plant Fibers + 2 Dirt → 1 Tape Roll
@@ -44,11 +54,14 @@
   - Set to `false` to allow all players to use commands without skill
   - Configuration located at top of EcoTransportMod.cs for easy access
 
+### Bug Fixes
+- Storage calculation now checks StorageRestrictions (Seed, Food, Cloth, blocks ...)
+- Storage calculation now checks LinkedStorages have AuthMayAdd (Put into) flag on.
+- TradeOpportunity is only shown if the store is ON. Closed stores won't appear.
+
 ### Technical
 - Added Unity AssetBundle support for custom skill and item icons
 - Bundle name: `ecotransport.unity3d` in `/Assets/` folder
-- Skill bonuses ready for future Harmony patch integration
-- New packaging items with proper tags for filtering and categorization
 - Configurable skill requirement via `EcoTransportModConfig.REQUIRE_LOGISTICS_SKILL` constant
 
 ## v1.2.0

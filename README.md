@@ -22,6 +22,7 @@ Reboot your server and it's done !
 - **Multi-Stop Route Optimization**: Find the most profitable delivery routes with multiple stops
 - **Skills System**: Complete Transporter profession with Logistics specialty skill
 - **Packing Table & Packaging Items**: Craft packaging materials for logistics operations
+- **Mail Box**: Outdoor craft table with 5 storage slots and 3 housing points
 - Find profitable trade opportunities across all stores
 - Filter by matching currency (buy and sell must use same currency)
 - Native Eco UI with clickable links for stores, items and currencies
@@ -91,7 +92,9 @@ Contributions and bug reports are welcome !
 - Harmony patches to apply Logistics skill bonuses to recipes
 - [Public Feature] Add feature DeliveryOpportunity which allow any user to place an order with delivery, and transporter (only) to answer it. Would probably take benefit of contracts.
 
-### Completed Features (v1.3.0)
-- ✅ Storage space check at buyer's store
-- ✅ Configurable skill requirement for admins
-- ✅ Multi-stop route optimization (automatic itinerary suggestion)
+### Completed Features
+- ✅ Storage space check at buyer's store (v1.3.0)
+- ✅ Configurable skill requirement for admins (v1.3.0)
+- ✅ Multi-stop route optimization (automatic itinerary suggestion) (v1.3.0)
+- ✅ Mail Box with outdoor housing and storage (v1.4.0)
+- ✅ Occupancy system for world objects (v1.4.0)

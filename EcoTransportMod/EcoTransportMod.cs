@@ -4,9 +4,11 @@
 namespace Eco.Mods.EcoTransportMod
 {
     using System;
+    using System.Collections;
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Reflection;
     using System.Text;
     using System.Threading;
     using Eco.Core.Plugins.Interfaces;
@@ -297,64 +299,239 @@ namespace Eco.Mods.EcoTransportMod
         /// </summary>
         private bool CanSellToStoreAcceptItems()
         {
-            var (isFull, _, _, _, hasStorageLimit) = GetSellToStorageInfo();
-
-            // If no storage limit detected, assume can accept
-            if (!hasStorageLimit) return true;
-
-            // Can accept if not full
-            return !isFull;
+            return GetSellToStorageCapacity() > 0;
         }
 
         /// <summary>
-        /// Gets the storage status of the sell-to store
-        /// Returns: (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit)
-        /// availableCapacity is the number of items that can be stored based on stack size
+        /// Checks if a specific storage can accept an item type based on storage restrictions
+        /// Returns true if the storage can accept the item, false if restricted
+        /// Also checks if "Put Into" permission is enabled via AuthorizationFlags
         /// </summary>
-        public (bool isFull, int availableCapacity, int totalSlots, int usedSlots, bool hasStorageLimit) GetSellToStorageInfo()
+        public static bool CanStorageAcceptItemType(PublicStorageComponent storage, Item item)
         {
-            if (SellTo?.Store == null || SellTo.ItemType == null)
-                return (false, int.MaxValue, 0, 0, false);
+            if (storage?.Parent == null || item == null) return false;
 
-            // Try to get LinkComponent to access linked storage
-            var linkComponent = SellTo.Store.GetComponent<LinkComponent>();
-            if (linkComponent == null)
-                return (false, int.MaxValue, 0, 0, false); // No link component
+            // Check if storage is enabled
+            if (!storage.Enabled)
+                return false;
 
-            // Get linked inventories
-            var linkedInventories = linkComponent.GetSortedLinkedInventories(SellTo.Store.Owners);
-            if (linkedInventories == null)
-                return (false, int.MaxValue, 0, 0, false); // No linked inventories
-
-            // Get storage info from the linked inventories
-            int totalSlots = linkedInventories.Stacks.Count();
-            int usedSlots = linkedInventories.NonEmptyStacks.Count();
-            int availableSlots = totalSlots - usedSlots;
-            bool isFull = linkedInventories.IsFull;
-
-            // If no valid storage was found
-            if (totalSlots == 0)
-                return (false, int.MaxValue, 0, 0, false);
-
-            // Calculate available capacity based on item stack size
-            var item = Item.Get(SellTo.ItemType);
-            int maxStackSize = item?.MaxStackSize ?? 1;
-
-            // Calculate capacity considering:
-            // 1. Empty slots can hold maxStackSize items each
-            // 2. Partially filled stacks of the same item can hold more
-            int availableCapacity = availableSlots * maxStackSize;
-
-            // Check if there are existing stacks of this item that aren't full
-            foreach (var stack in linkedInventories.Stacks)
+            // Check if inventory has "Put Into" permission (AuthedMayAdd flag)
+            if (storage.Inventory != null)
             {
-                if (stack?.Item?.Type == SellTo.ItemType && stack.Quantity < maxStackSize)
+                try
                 {
-                    availableCapacity += (maxStackSize - stack.Quantity);
+                    var authProperty = storage.Inventory.GetType().GetProperty("Authorizations");
+                    if (authProperty != null)
+                    {
+                        var authValue = authProperty.GetValue(storage.Inventory);
+                        if (authValue != null)
+                        {
+                            // Check if AuthedMayAdd flag is set (allows putting items in)
+                            var authFlags = authValue.ToString();
+                            if (!authFlags.Contains("AuthedMayAdd"))
+                            {
+                                return false; // "Put Into" is disabled
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // If we can't check authorization, assume it's allowed
                 }
             }
 
-            return (isFull, availableCapacity, totalSlots, usedSlots, true);
+            // Check inventory restrictions directly
+            if (storage.Inventory != null)
+            {
+                try
+                {
+                    var restrictionsProperty = storage.Inventory.GetType().GetProperty("Restrictions");
+                    if (restrictionsProperty != null)
+                    {
+                        var restrictions = restrictionsProperty.GetValue(storage.Inventory) as IEnumerable<object>;
+                        if (restrictions != null)
+                        {
+                            foreach (var restriction in restrictions)
+                            {
+                                if (restriction == null) continue;
+
+                                var restrictionType = restriction.GetType().Name;
+
+                                // NotCarriedRestriction - cannot store Carried items (logs, rocks, etc.)
+                                if (restrictionType.Contains("NotCarriedRestriction"))
+                                {
+                                    bool isCarriedItem = item.Category == "Block" || item.IsCarried;
+                                    if (isCarriedItem)
+                                        return false; // Chest/container cannot accept Carried items
+                                }
+
+                                // FoodStorageRestriction - only food items
+                                else if (restrictionType.Contains("FoodStorageRestriction"))
+                                {
+                                    bool isFoodItem = item.Category == "Food";
+                                    if (!isFoodItem)
+                                        return false; // Icebox/Refrigerator only accepts food
+                                }
+
+                                // ClothItemRestriction - only clothing/tools
+                                else if (restrictionType.Contains("ClothItemRestriction"))
+                                {
+                                    bool isClothItem = item.Category == "Clothing" || item.Category == "Tool";
+                                    if (!isClothItem)
+                                        return false; // Dresser only accepts clothing
+                                }
+
+                                // FuelStorageRestriction - only fuel items
+                                else if (restrictionType.Contains("FuelStorageRestriction") || restrictionType.Contains("FuelRestriction"))
+                                {
+                                    // Check if item has Fuel tag or is in Fuel category
+                                    bool isFuelItem = item.Category == "Fuel" || item.Tags().Any(tag => tag.Name == "Fuel");
+                                    if (!isFuelItem)
+                                        return false; // Fuel storage only accepts fuel
+                                }
+
+                                // SeedRestriction - only seed items (for planters/pots)
+                                else if (restrictionType.Contains("SeedRestriction"))
+                                {
+                                    // Check if item is a seed (has "Seed" in name or tags)
+                                    bool isSeedItem = item.DisplayName.ToString().Contains("Seed") ||
+                                                      item.Tags().Any(tag => tag.Name.Contains("Seed"));
+                                    if (!isSeedItem)
+                                        return false; // Planter/Pot only accepts seeds
+                                }
+
+                                // WeightRestriction - storage has weight limit (carts, etc.)
+                                // We can't easily check current weight, so we'll be conservative
+                                // and not count these as valid for capacity calculation
+                                else if (restrictionType.Contains("WeightRestriction"))
+                                {
+                                    // For items that are carried (logs, blocks), weight restriction
+                                    // likely means the cart could be weight-limited
+                                    // Skip these storages for carried items to be safe
+                                    if (item.IsCarried)
+                                        return false;
+                                }
+
+                                // StackLimitRestriction - limits stack size, but doesn't prevent storage
+                                // We handle this by not blocking, but it may affect capacity calculations
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // If we can't check restrictions, fall back to default behavior
+                }
+            }
+
+            // No restrictions blocked the item, it can be accepted
+            return true;
+        }
+
+        /// <summary>
+        /// Gets all individual storage components from a store's linked chain
+        /// Uses Reflection to access LinkedObjects property
+        /// </summary>
+        public static List<PublicStorageComponent> GetAllLinkedStorages(WorldObject store)
+        {
+            var result = new List<PublicStorageComponent>();
+
+            // Add the store's own storage first
+            var ownStorage = store.GetComponent<PublicStorageComponent>();
+            if (ownStorage != null)
+                result.Add(ownStorage);
+
+            var linkComponent = store.GetComponent<LinkComponent>();
+            if (linkComponent == null) return result;
+
+            // Use Reflection to access LinkedObjects (it's a ConcurrentHashSet)
+            var linkedObjectsProp = typeof(LinkComponent).GetProperty("LinkedObjects",
+                BindingFlags.Instance | BindingFlags.Public);
+
+            if (linkedObjectsProp?.GetValue(linkComponent) is not IEnumerable linkedObjects)
+                return result;
+
+            // Create snapshot to avoid concurrent modification
+            var snapshot = new List<LinkComponent>();
+            foreach (var obj in linkedObjects)
+            {
+                if (obj is LinkComponent lc)
+                    snapshot.Add(lc);
+            }
+
+            // Iterate through each linked object
+            foreach (var linkedComp in snapshot)
+            {
+                if (linkedComp?.Parent == null || linkedComp.Parent.IsDestroyed)
+                    continue;
+
+                // Get storage component from linked object
+                var storage = linkedComp.Parent.GetComponent<PublicStorageComponent>();
+                if (storage != null)
+                    result.Add(storage);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Gets the available storage capacity for this item in the sell-to store's linked storages.
+        /// Returns the number of items that can be stored, considering:
+        /// - Storage restrictions (NotCarried, Food, Seed, Weight, etc.)
+        /// - Put Into permission (AuthedMayAdd)
+        /// - Partial stacks of the same item
+        /// - Empty slots in valid storages
+        /// Returns 0 if no capacity available (FULL).
+        /// </summary>
+        public int GetSellToStorageCapacity()
+        {
+            if (SellTo?.Store == null || SellTo.ItemType == null)
+                return 0;
+
+            var item = Item.Get(SellTo.ItemType);
+            if (item == null)
+                return 0;
+
+            var allStorages = GetAllLinkedStorages(SellTo.Store);
+            if (!allStorages.Any())
+                return 0;
+
+            int maxStackSize = item.MaxStackSize;
+            int availableCapacity = 0;
+
+            foreach (var storage in allStorages)
+            {
+                if (storage?.Inventory == null) continue;
+
+                // Check if this storage can accept the item (restrictions + permissions)
+                if (!CanStorageAcceptItemType(storage, item))
+                    continue;
+
+                var stacks = storage.Inventory.Stacks.ToList();
+
+                // Add capacity from partial stacks of the same item
+                foreach (var stack in stacks)
+                {
+                    if (stack?.Item?.Type == SellTo.ItemType && stack.Quantity < maxStackSize)
+                    {
+                        availableCapacity += (maxStackSize - stack.Quantity);
+                    }
+                }
+
+                // Count empty slots
+                int emptySlots = stacks.Count(s => s.Empty());
+                bool hasThisItem = stacks.Any(s => s?.Item?.Type == SellTo.ItemType);
+                bool isEmpty = stacks.All(s => s.Empty());
+
+                // Add capacity from empty slots if storage already has this item or is empty
+                if (hasThisItem || isEmpty)
+                {
+                    availableCapacity += emptySlots * maxStackSize;
+                }
+            }
+
+            return availableCapacity;
         }
 
         public float TotalCost => BuyFrom.Price * MaxQuantity;
@@ -466,6 +643,11 @@ namespace Eco.Mods.EcoTransportMod
         {
             try
             {
+                // Check if store is active (turned On)
+                var onOffComponent = worldObject.GetComponent<OnOffComponent>();
+                if (onOffComponent != null && !onOffComponent.On)
+                    return; // Store is turned Off, skip it
+
                 var offers = store.AllOffers;
                 if (offers == null) return;
 
@@ -782,35 +964,30 @@ namespace Eco.Mods.EcoTransportMod
                 bool canAfford = userBalance >= opp.TotalCost;
                 var totalCostColor = canAfford ? "#9CCD4F" : "#FF6B6B"; // Green if affordable, light red if not
 
-                // Get storage info for sell-to store
-                var (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit) = opp.GetSellToStorageInfo();
+                // Get storage capacity for sell-to store
+                int storageCapacity = opp.GetSellToStorageCapacity();
 
                 content.AppendLine(Localizer.Do($"    - {opp.BuyFrom.GetStoreLink()}  →  {opp.SellTo.GetStoreLink()}"));
 
-                // Build storage status message - always show if has storage limit
-                string storageStatus = "";
-                if (hasStorageLimit)
+                // Build storage status message
+                string storageStatus;
+                if (storageCapacity == 0)
                 {
-                    if (isFull)
-                    {
-                        storageStatus = Text.Color("#FF6B6B", "FULL - Cannot accept items");
-                    }
-                    else if (availableCapacity < opp.MaxQuantity)
-                    {
-                        storageStatus = Text.Color("#FFA500", $"Limited ({availableCapacity} items can fit)");
-                    }
-                    else
-                    {
-                        storageStatus = Text.Positive($"✓");
-                    }
+                    storageStatus = Text.Color("#FF6B6B", "FULL");
                 }
+                else if (storageCapacity < opp.MaxQuantity)
+                {
+                    storageStatus = Text.Color("#FFA500", $"Limited to {storageCapacity}");
+                }
+                else
+                {
+                    storageStatus = Text.Positive($"{storageCapacity}");
+                }
+
                 var affordMsg = canAfford ? "" : $"  {Text.Color(totalCostColor, "(you only have " + Text.StyledNum(userBalance) + ")")}";
                 content.AppendLine(Localizer.Do($"      Buy x {Text.Info($"{opp.MaxQuantity}")} at {Text.Positive(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))} {currencyLink}            →            Sell at {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))} {currencyLink}"));
                 content.AppendLine(Localizer.Do($"      Total Investment:   {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink} {affordMsg} "));
-                if (hasStorageLimit)
-                {
-                    content.AppendLine(Localizer.Do($"      Storage capacity: {Text.Bold(storageStatus)}"));
-                }
+                content.AppendLine(Localizer.Do($"      Storage: {Text.Bold(storageStatus)}"));
                 content.AppendLine(Localizer.Do($"      Distance:   {Text.Info($"{opp.Distance:F0}")} meters"));
                 content.AppendLine(Localizer.Do($"      Margin:  {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.Margin)))}    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}"));
                 content.AppendLine();
@@ -905,26 +1082,21 @@ namespace Eco.Mods.EcoTransportMod
             content.AppendLine(Localizer.Do($"Wants: {Text.Info(opp.SellTo.Quantity.ToString())}"));
 
             // Storage info
-            var (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit) = opp.GetSellToStorageInfo();
-            if (hasStorageLimit)
+            int storageCapacity = opp.GetSellToStorageCapacity();
+            string storageText;
+            if (storageCapacity == 0)
             {
-                if (isFull)
-                {
-                    content.AppendLine(Localizer.Do($"Storage: {Text.Color("#FF6B6B", "FULL - Cannot accept items")}"));
-                }
-                else if (availableCapacity < opp.MaxQuantity)
-                {
-                    content.AppendLine(Localizer.Do($"Storage: {Text.Color("#FFA500", $"Limited ({availableCapacity} items can fit)")}"));
-                }
-                else
-                {
-                    content.AppendLine(Localizer.Do($"Storage: {Text.Positive($"{availableCapacity} units can fit")}"));
-                }
+                storageText = Text.Color("#FF6B6B", "FULL - Cannot accept items");
+            }
+            else if (storageCapacity < opp.MaxQuantity)
+            {
+                storageText = Text.Color("#FFA500", $"{storageCapacity} items can fit");
             }
             else
             {
-                content.AppendLine(Localizer.Do($"Storage: {Text.Info("Unlimited")}"));
+                storageText = Text.Positive($"{storageCapacity} items can fit");
             }
+            content.AppendLine(Localizer.Do($"Storage: {storageText}"));
             content.AppendLine();
 
             // Profit analysis
@@ -1012,25 +1184,22 @@ namespace Eco.Mods.EcoTransportMod
                     content.AppendLine(Localizer.Do($"    Buy x{Text.Info(opp.MaxQuantity.ToString())} at {Text.Positive(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))} {currencyLink}  →  Sell at {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))} {currencyLink}"));
 
                     // Storage info for sell-to store
-                    var (isFull, availableCapacity, totalSlots, usedSlots, hasStorageLimit) = opp.GetSellToStorageInfo();
-                    string storageStatus = "";
-                    if (hasStorageLimit)
+                    int storageCapacity = opp.GetSellToStorageCapacity();
+                    string storageStatus;
+                    if (storageCapacity == 0)
                     {
-                        if (isFull)
-                        {
-                            storageStatus = $"    |    Storage: {Text.Color("#FF6B6B", "FULL")}";
-                        }
-                        else if (availableCapacity < opp.MaxQuantity)
-                        {
-                            storageStatus = $"    |    Storage: {Text.Color("#FFA500", $"Limited ({availableCapacity})")}";
-                        }
-                        else
-                        {
-                            storageStatus = $"    |    Storage: {Text.Positive("✓")}";
-                        }
+                        storageStatus = Text.Color("#FF6B6B", "FULL");
+                    }
+                    else if (storageCapacity < opp.MaxQuantity)
+                    {
+                        storageStatus = Text.Color("#FFA500", $"{storageCapacity}");
+                    }
+                    else
+                    {
+                        storageStatus = Text.Positive($"{storageCapacity}");
                     }
 
-                    content.AppendLine(Localizer.Do($"    Distance: {Text.Info($"{opp.Distance:F0}")}m    |    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}{storageStatus}"));
+                    content.AppendLine(Localizer.Do($"    Distance: {Text.Info($"{opp.Distance:F0}")}m    |    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}    |    Storage: {storageStatus}"));
                     content.AppendLine();
                 }
 
