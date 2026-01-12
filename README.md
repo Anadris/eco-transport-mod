@@ -19,18 +19,20 @@ Reboot your server and it's done !
 
 ## Features
 
-- **Multi-Stop Route Optimization**: Find the most profitable delivery routes with multiple stops
-- **Skills System**: Complete Transporter profession with Logistics specialty skill
-- **Packing Table & Packaging Items**: Craft packaging materials for logistics operations
-- **Mail Box**: Outdoor craft table with 5 storage slots and 3 housing points
 - Find profitable trade opportunities across all stores
+- Find the most profitable delivery routes with multiple stops
 - Filter by matching currency (buy and sell must use same currency)
 - Native Eco UI with clickable links for stores, items and currencies
 - Distance calculation between buy/sell locations
 - Check you can afford the investment
-- Check buyer's can afford the delivery, and have available storage
+- Check buyer's can afford the delivery, and have available storage for the items
+- Check buyer's store is accessible to everyone
 - Usage statistics tracking per player
 - **Configurable skill requirement** for server admins
+- **Skills System**: Experimental Transporter profession with Logistics specialty skill
+- **Packing Table & Packaging Items**: Craft packaging materials for logistics operations
+- **Mail Boxes**: Outdoor Housing items with 5 to 10 storage slots and 3 to 4 housing points
+More content to come on profession in next updates
 
 ## Usage
 
@@ -41,8 +43,8 @@ See available commands by typing `/transport info`
 | Command | Description |
 | ------- | ----------- |
 | `/transport panel` | Open the main UI panel |
-| `/transport panel [n]` | Open the main UI panel (max 200 items) |
-| `/transport route [max]` | Find optimized multi-stop delivery routes |
+| `/transport panel <n>` | Open the main UI panel (max 200 items) |
+| `/transport route` | Find optimized multi-stop delivery routes |
 | `/transport find <product>` | Search with UI panel |
 | `/transport detail <product>` | Detailed product analysis |
 | `/transport refresh` | Refresh market data |
@@ -90,11 +92,4 @@ Contributions and bug reports are welcome !
 - Add config for transport method (cart, truck)
 - Add transportation info (number of trips required based on carry capacity)
 - Harmony patches to apply Logistics skill bonuses to recipes
-- [Public Feature] Add feature DeliveryOpportunity which allow any user to place an order with delivery, and transporter (only) to answer it. Would probably take benefit of contracts.
-
-### Completed Features
-- ✅ Storage space check at buyer's store (v1.3.0)
-- ✅ Configurable skill requirement for admins (v1.3.0)
-- ✅ Multi-stop route optimization (automatic itinerary suggestion) (v1.3.0)
-- ✅ Mail Box with outdoor housing and storage (v1.4.0)
-- ✅ Occupancy system for world objects (v1.4.0)
+- [Public Feature] Add feature DeliveryOpportunity which allow any user to place an order with delivery, and transporter (only) to answer it. Would take benefit of MailBoxes and notifications.

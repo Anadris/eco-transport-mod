@@ -27,6 +27,7 @@ namespace Eco.Mods.EcoTransportMod
     using Eco.Shared.Utils;
     using Eco.Gameplay.Economy;
     using Eco.Gameplay.Aliases;
+    using Eco.Gameplay.Components.Auth;
     using Eco.Mods.TechTree;
 
     // ═══════════════════════════════════════════════════════════════
@@ -563,6 +564,99 @@ namespace Eco.Mods.EcoTransportMod
         {
             return $"{{\"product\":\"{ProductName}\",\"buyPrice\":{BuyFrom.Price},\"buyStore\":\"{BuyFrom.StoreName}\",\"sellPrice\":{SellTo.Price},\"sellStore\":\"{SellTo.StoreName}\",\"margin\":{Margin},\"quantity\":{MaxQuantity},\"profit\":{TotalProfit},\"distance\":{Distance:F0}}}";
         }
+
+        /// <summary>
+        /// Checks if a user has access to the sell-to store
+        /// Uses PropertyAuthComponent to check if store is public or user has consumer access
+        /// </summary>
+        /// <param name="user">The user to check access for</param>
+        /// <returns>True if user can access the store, false otherwise</returns>
+        public bool CanUserAccessSellToStore(User user)
+        {
+            if (SellTo?.Store == null || user == null)
+                return false;
+
+            try
+            {
+                var authComp = SellTo.Store.GetComponent<PropertyAuthComponent>();
+                if (authComp == null)
+                    return true; // No auth component = public access
+
+                // Check IsPublicProperty via reflection
+                var isPublicProp = authComp.GetType().GetProperty("IsPublicProperty", BindingFlags.Instance | BindingFlags.Public);
+                if (isPublicProp != null)
+                {
+                    var isPublic = isPublicProp.GetValue(authComp) as bool?;
+                    if (isPublic == true)
+                        return true;
+                }
+
+                // Check UsersWithConsumerAccess - if user is in this list, they have access
+                var consumerAccessProp = authComp.GetType().GetProperty("UsersWithConsumerAccess", BindingFlags.Instance | BindingFlags.Public);
+                if (consumerAccessProp != null)
+                {
+                    var usersWithAccess = consumerAccessProp.GetValue(authComp) as IEnumerable;
+                    if (usersWithAccess != null)
+                    {
+                        foreach (var u in usersWithAccess)
+                        {
+                            if (u == user) return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+            catch
+            {
+                return true; // On error, allow access to not block legitimate trades
+            }
+        }
+
+        /// <summary>
+        /// Gets a debug string for store access status (for UI display)
+        /// </summary>
+        public string GetAccessDebugStatus(User user)
+        {
+            if (SellTo?.Store == null || user == null)
+                return "Store/User null";
+
+            try
+            {
+                var authComp = SellTo.Store.GetComponent<PropertyAuthComponent>();
+                if (authComp == null)
+                    return "No Auth (OK)";
+
+                // Check IsPublicProperty
+                var isPublicProp = authComp.GetType().GetProperty("IsPublicProperty", BindingFlags.Instance | BindingFlags.Public);
+                if (isPublicProp != null)
+                {
+                    var isPublic = isPublicProp.GetValue(authComp) as bool?;
+                    if (isPublic == true)
+                        return "Public";
+                }
+
+                // Check UsersWithConsumerAccess
+                var consumerAccessProp = authComp.GetType().GetProperty("UsersWithConsumerAccess", BindingFlags.Instance | BindingFlags.Public);
+                if (consumerAccessProp != null)
+                {
+                    var usersWithAccess = consumerAccessProp.GetValue(authComp) as IEnumerable;
+                    if (usersWithAccess != null)
+                    {
+                        foreach (var u in usersWithAccess)
+                        {
+                            if (u == user) return "Consumer";
+                        }
+                    }
+                }
+
+                return "No Access";
+            }
+            catch (Exception ex)
+            {
+                return $"Err: {ex.Message}";
+            }
+        }
     }
 
     /// <summary>
@@ -714,11 +808,18 @@ namespace Eco.Mods.EcoTransportMod
                                 if (sellTo.Owner != null && sellTo.Owner.ContainsUser(requestingUser))
                                     continue;
 
-                                opportunities.Add(new TradeOpportunity
+                                // Create opportunity to check access
+                                var opportunity = new TradeOpportunity
                                 {
                                     BuyFrom = buyFrom,
                                     SellTo = sellTo
-                                });
+                                };
+
+                                // FIRST CHECK: Verify user has access to sell-to store
+                                if (!opportunity.CanUserAccessSellToStore(requestingUser))
+                                    continue;
+
+                                opportunities.Add(opportunity);
                             }
                         }
                     }
@@ -984,10 +1085,15 @@ namespace Eco.Mods.EcoTransportMod
                     storageStatus = Text.Positive($"{storageCapacity}");
                 }
 
+                // Get access status for display
+                var accessStatus = opp.GetAccessDebugStatus(user);
+                var accessColor = (accessStatus == "Public" || accessStatus == "Consumer" || accessStatus == "No Auth (OK)") ? "#9CCD4F" : "#FF6B6B";
+
                 var affordMsg = canAfford ? "" : $"  {Text.Color(totalCostColor, "(you only have " + Text.StyledNum(userBalance) + ")")}";
                 content.AppendLine(Localizer.Do($"      Buy x {Text.Info($"{opp.MaxQuantity}")} at {Text.Positive(Text.Bold(Text.StyledNum(opp.BuyFrom.Price)))} {currencyLink}            →            Sell at {Text.Positive(Text.Bold(Text.StyledNum(opp.SellTo.Price)))} {currencyLink}"));
                 content.AppendLine(Localizer.Do($"      Total Investment:   {Text.Color(totalCostColor, Text.Bold(opp.TotalCost))} {currencyLink} {affordMsg} "));
                 content.AppendLine(Localizer.Do($"      Storage: {Text.Bold(storageStatus)}"));
+                content.AppendLine(Localizer.Do($"      Access: {Text.Color(accessColor, accessStatus)}"));
                 content.AppendLine(Localizer.Do($"      Distance:   {Text.Info($"{opp.Distance:F0}")} meters"));
                 content.AppendLine(Localizer.Do($"      Margin:  {Text.Bold(Text.Color(marginColor, Text.StyledNum(opp.Margin)))}    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}"));
                 content.AppendLine();
@@ -1097,6 +1203,11 @@ namespace Eco.Mods.EcoTransportMod
                 storageText = Text.Positive($"{storageCapacity} items can fit");
             }
             content.AppendLine(Localizer.Do($"Storage: {storageText}"));
+
+            // Access info
+            var accessStatus = opp.GetAccessDebugStatus(user);
+            var accessColor = (accessStatus == "Public" || accessStatus == "Consumer" || accessStatus == "No Auth (OK)") ? "#9CCD4F" : "#FF6B6B";
+            content.AppendLine(Localizer.Do($"Access: {Text.Color(accessColor, accessStatus)}"));
             content.AppendLine();
 
             // Profit analysis
@@ -1199,7 +1310,11 @@ namespace Eco.Mods.EcoTransportMod
                         storageStatus = Text.Positive($"{storageCapacity}");
                     }
 
-                    content.AppendLine(Localizer.Do($"    Distance: {Text.Info($"{opp.Distance:F0}")}m    |    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}    |    Storage: {storageStatus}"));
+                    // Access info
+                    var accessStatus = opp.GetAccessDebugStatus(user);
+                    var accessColor = (accessStatus == "Public" || accessStatus == "Consumer" || accessStatus == "No Auth (OK)") ? "#9CCD4F" : "#FF6B6B";
+
+                    content.AppendLine(Localizer.Do($"    Distance: {Text.Info($"{opp.Distance:F0}")}m    |    Storage: {storageStatus}    |    Access: {Text.Color(accessColor, accessStatus)}    |    Profit: {Text.Positive(Text.Bold(Text.StyledNum(opp.TotalProfit)))} {currencyLink}"));
                     content.AppendLine();
                 }
 

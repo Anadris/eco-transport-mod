@@ -11,6 +11,19 @@
   - Displays efficiency ratio (profit per meter traveled)
   - Prevents circular routes by tracking visited stores
   - Requires Logistics skill level 1
+- Usage statistics tracking: all transport commands now track usage by player with timestamps
+- `/transport stats` command: displays comprehensive usage statistics
+  - Shows total command usage (all time and last 24 hours)
+  - Breaks down statistics by command type (panel, find, detail, refresh, info, stats)
+- All commands now record usage with timestamp: panel, find, detail, refresh, info, stats
+
+Next is experimental and are the foundation for future updates :)
+If you want to keep using the chat commands without taking the entire profession: 
+- **Server Configuration**: Configurable skill requirement
+  - `REQUIRE_LOGISTICS_SKILL` constant in code to enable/disable Logistics skill requirement
+  - Set to `true` by default (requires Logistics level 1)
+  - Set to `false` to allow all players to use commands without skill
+  - Configuration located at top of EcoTransportMod.cs for easy access (below imports)
 
 - **New Skills System**: Introduces Transporter profession and Logistics specialty
   - `TransporterSkill`: Profession skill, foundation for transportation specialists
@@ -43,21 +56,12 @@
   - **Shredded Cardboard** (Logistics lvl 1): 1 Wood Paste + 1 Wood Pulp + 1 Plant Fibers → 1 Shredded Cardboard
   - **Package Box** (Logistics lvl 2): 3 Shredded Cardboard + 1 Tape Roll → 1 Package Box
   - All recipes craftable at Packing Table
-- Usage statistics tracking: all transport commands now track usage by player with timestamps
-- `/transport stats` command: displays comprehensive usage statistics
-  - Shows total command usage (all time and last 24 hours)
-  - Breaks down statistics by command type (panel, find, detail, refresh, info, stats)
-- All commands now record usage with timestamp: panel, find, detail, refresh, info, stats
-- **Server Configuration**: Configurable skill requirement
-  - `REQUIRE_LOGISTICS_SKILL` constant in code to enable/disable Logistics skill requirement
-  - Set to `true` by default (requires Logistics level 1)
-  - Set to `false` to allow all players to use commands without skill
-  - Configuration located at top of EcoTransportMod.cs for easy access
 
 ### Bug Fixes
 - Storage calculation now checks StorageRestrictions (Seed, Food, Cloth, blocks ...)
 - Storage calculation now checks LinkedStorages have AuthMayAdd (Put into) flag on.
 - TradeOpportunity is only shown if the store is ON. Closed stores won't appear.
+- TradeOpportunity is only shown if the store is Public (Everyone has access).
 
 ### Technical
 - Added Unity AssetBundle support for custom skill and item icons
